@@ -1,0 +1,28 @@
+FROM maven:3.8-openjdk-17-slim
+
+RUN apt-get update && apt-get install -y \
+    bash \
+    unzip \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pom.xml /app/pom.xml
+
+COPY loader /app/loader
+
+RUN mvn -f /app/pom.xml install -N
+
+RUN mkdir -p /app/loader/src/main/resources
+
+COPY deploy/docker/scripts/wait-for-key.sh /app/wait-for-key.sh
+COPY deploy/docker/scripts/build-plugin.sh /app/build-plugin.sh
+RUN chmod +x /app/wait-for-key.sh /app/build-plugin.sh
+
+RUN mkdir -p /out && \
+    useradd -r -u 1001 -m appuser && chown -R appuser:appuser /app /out
+USER appuser
+
+CMD ["/app/build-plugin.sh"]

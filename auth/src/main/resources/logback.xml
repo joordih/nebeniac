@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Console appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>[%d{HH:mm:ss}] [%level] %logger{0} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Root logger -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- Application specific loggers -->
+    <logger name="dev.neuralabs.auth" level="DEBUG"/>
+
+    <!-- Reduce noise from some libraries -->
+    <logger name="org.eclipse.jetty" level="WARN"/>
+    <logger name="org.mongodb.driver" level="WARN"/>
+    <logger name="spark" level="WARN"/>
+</configuration>

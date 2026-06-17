@@ -1,0 +1,56 @@
+# SecurePluginLoader configuration
+# ==================================
+
+# License configuration
+license:
+  # License key (replace with a valid license)
+  key: ""
+
+  # License server URL
+  server-url: "http://localhost:8080"
+
+# Crypto configuration
+crypto:
+  # Algorithm type: AES, AES-Nebeniac
+  type: "AES"
+
+  # Enable cache for decrypted classes (improves performance)
+  enable-cache: true
+
+# Protected plugins are loaded automatically by Bukkit.
+# No per-plugin configuration is needed here.
+# Each protected plugin includes its own SecureBootstrap.
+
+# List of secure plugins to load (optional — loader mode)
+plugins: [ ]
+
+# Per-plugin configuration (optional)
+plugins: { }
+
+# Logging configuration
+logging:
+  # Log level: FINE, INFO, WARNING, SEVERE
+  level: "FINE"
+
+  # Enable crypto debug logging
+  debug-crypto: true
+
+  # Enable class-loading debug logging
+  debug-class-loading: true
+
+# Security configuration
+security:
+  # Enable development mode (relaxed restrictions)
+  development-mode: true
+
+  # Enable continuous license verification
+  continuous-verification: true
+
+  # Verification interval in seconds (300 = 5 minutes)
+  verification-interval: 300
+
+  # Random salt provided by the server to strengthen the hardware fingerprint
+  hardware-fingerprint-salt: ""
+
+  # Ed25519 public key in Base64 for verifying JAR signatures
+  signature-public-key: ""

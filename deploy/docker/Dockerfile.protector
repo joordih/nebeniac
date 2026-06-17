@@ -1,0 +1,32 @@
+FROM openjdk:17-jdk-slim
+
+RUN apt-get update && apt-get install -y \
+    maven \
+    bash \
+    inotify-tools \
+    jq \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY protector/pom.xml .
+COPY protector/src ./src
+
+RUN mvn clean install -U
+
+RUN mkdir -p /app/input /app/output /app/temp /app/shared
+
+RUN find target -name "*-shaded.jar" -exec cp {} /app/shared/protector.jar \; || \
+    find target -name "protector-*.jar" -exec cp {} /app/shared/protector.jar \; || \
+    cp target/protector-1.0-SNAPSHOT.jar /app/shared/protector.jar
+
+COPY deploy/docker/scripts/protector-service.sh /app/protector-service.sh
+RUN chmod +x /app/protector-service.sh && \
+    useradd -r -u 1001 -m appuser && chown -R appuser:appuser /app
+
+USER appuser
+
+VOLUME ["/app/input", "/app/output", "/app/temp", "/app/shared"]
+
+CMD ["/bin/bash", "/app/protector-service.sh"]

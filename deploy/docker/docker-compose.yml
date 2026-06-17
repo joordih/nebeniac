@@ -1,0 +1,192 @@
+version: "3.8"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: nebeniac-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: nebeniac
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - nebeniac-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7.0
+    container_name: nebeniac-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: nebeniac
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: nebeniac
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    networks:
+      - nebeniac-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  auth-server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.auth
+    container_name: nebeniac-auth
+    restart: unless-stopped
+    environment:
+      - SERVER_PORT=8080
+      - DATABASE_TYPE=MONGODB
+      - MONGODB_URI=${MONGODB_URI}
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      - GOOGLE_OAUTH_REFRESH_TOKEN=${GOOGLE_OAUTH_REFRESH_TOKEN:-}
+      - EMAIL_FROM=${EMAIL_FROM:-noreply@nebeniac.com}
+      - APP_BASE_URL=http://localhost:3000
+      - PROTECTOR_JAR_PATH=/app/protector/protector.jar
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=nebeniac
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      - E2EE_ENABLED=true
+      - E2EE_KEYS_PATH=/app/keys
+      - E2EE_KEY_ROTATION_ENABLED=true
+      - E2EE_KEY_ROTATION_DAYS=30
+      - E2EE_RESPONSE_ENCRYPTION=true
+      - E2EE_RATE_LIMIT_ENABLED=true
+      - E2EE_RATE_LIMIT_REQUESTS_PER_MINUTE=60
+    ports:
+      - "8080:8080"
+      - "8082:8081"
+    volumes:
+      - auth_data:/app/data
+      - e2ee_keys:/app/keys
+      - auth_signature_keys:/app/auth/keys/signatures
+      - protector_shared:/app/protector
+      - plugins_storage:/app/plugins
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      protector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8080' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - nebeniac-network
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.dashboard
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+        - VITE_API_BASE_URL=http://localhost:8080/api/v1
+    container_name: nebeniac-dashboard
+    restart: unless-stopped
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - auth-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - nebeniac-network
+
+  protector:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.protector
+    container_name: nebeniac-protector
+    restart: unless-stopped
+    environment:
+      - RABBITMQ_HOST=nebeniac-rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=nebeniac
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+    volumes:
+      - protector_input:/app/input
+      - protector_output:/app/output
+      - protector_temp:/app/temp
+      - protector_shared:/app/shared
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - nebeniac-network
+
+  plugin-builder:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.plugin-builder
+    container_name: nebeniac-plugin-builder
+    restart: "no"
+    volumes:
+      - e2ee_keys:/app/keys:ro
+      - ../../dist/plugins:/out:rw
+    depends_on:
+      auth-server:
+        condition: service_started
+    networks:
+      - nebeniac-network
+    environment:
+      - BUILD_TIMEOUT=300
+
+  nginx:
+    image: nginx:alpine
+    container_name: nebeniac-nginx
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - auth-server
+      - dashboard
+    networks:
+      - nebeniac-network
+
+volumes:
+  rabbitmq_data:
+  mongodb_data:
+  auth_data:
+  e2ee_keys:
+  auth_signature_keys:
+  protector_input:
+  protector_output:
+  protector_temp:
+  protector_shared:
+  plugins_storage:
+
+networks:
+  nebeniac-network:
+    driver: bridge

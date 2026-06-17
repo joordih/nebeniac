@@ -1,0 +1,37 @@
+FROM openjdk:17-jdk-slim
+
+RUN apt-get update && apt-get install -y \
+    maven \
+    bash \
+    inotify-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY auth/pom.xml .
+COPY auth/src ./src
+
+RUN mvn clean install -U
+
+RUN mkdir -p /app/data /app/plugins /app/temp /app/keys /app/scripts
+
+COPY deploy/docker/scripts/init-e2ee.sh /app/scripts/init-e2ee.sh
+COPY deploy/docker/scripts/auth-entrypoint.sh /app/scripts/auth-entrypoint.sh
+
+RUN chmod +x /app/scripts/*.sh
+
+EXPOSE 8080
+
+ENV SERVER_PORT=8080
+ENV DATABASE_TYPE=local
+ENV APP_BASE_URL=http://localhost:3000
+ENV PROTECTOR_JAR_PATH=/app/protector/protector.jar
+ENV E2EE_KEYS_PATH=/app/keys
+
+RUN find target -name "auth-*.jar" -exec cp {} /app/auth.jar \; || \
+    cp target/auth-1.0-SNAPSHOT.jar /app/auth.jar
+
+RUN useradd -r -u 1001 -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+ENTRYPOINT ["/app/scripts/auth-entrypoint.sh"]

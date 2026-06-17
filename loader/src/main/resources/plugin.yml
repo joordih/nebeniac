@@ -1,0 +1,38 @@
+name: SecurePluginLoader
+version: 1.0.0
+description: Loader for encrypted secure plugins using Cerberus architecture
+author: NeuralAbs
+website: https://neuralabs.dev
+main: dev.neuralabs.loader.SecurePluginLoader
+
+api-version: 1.8
+
+commands:
+  secureloader:
+    description: Main command for the secure plugin loader
+    usage: /<command> [subcommand]
+    permission: secureloader.use
+    aliases: [ sl, loader ]
+
+permissions:
+  secureloader.*:
+    description: Full access to the secure plugin loader
+    default: op
+    children:
+      secureloader.use: true
+      secureloader.admin: true
+      secureloader.reload: true
+
+  secureloader.use:
+    description: Basic loader usage
+    default: true
+
+  secureloader.admin:
+    description: Administrative commands
+    default: op
+
+  secureloader.reload:
+    description: Reload loader configuration
+    default: op
+
+load: STARTUP
