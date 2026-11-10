@@ -1,4 +1,4 @@
-FROM openjdk:17-jdk-slim
+FROM eclipse-temurin:17-jdk
 
 RUN apt-get update && apt-get install -y \
     maven \
@@ -13,7 +13,7 @@ COPY auth/src ./src
 
 RUN mvn clean install -U
 
-RUN mkdir -p /app/data /app/plugins /app/temp /app/keys /app/scripts
+RUN mkdir -p /app/data /app/plugins /app/temp /app/keys /app/scripts /app/auth/keys/signatures /app/protector
 
 COPY deploy/docker/scripts/init-e2ee.sh /app/scripts/init-e2ee.sh
 COPY deploy/docker/scripts/auth-entrypoint.sh /app/scripts/auth-entrypoint.sh

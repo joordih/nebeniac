@@ -5,16 +5,12 @@ import dev.neuralabs.auth.model.*;
 import java.util.List;
 import java.util.Map;
 
-
 public interface DatabaseInterface {
-
-
   void initialize();
 
   boolean isHealthy();
 
   void shutdown();
-
 
   License findLicenseByKey(String licenseKey);
 
@@ -24,7 +20,6 @@ public interface DatabaseInterface {
 
   void deleteLicense(String licenseKey);
 
-
   Plugin findPluginById(String pluginId);
 
   List<Plugin> findAllPlugins();
@@ -33,13 +28,11 @@ public interface DatabaseInterface {
 
   void deletePlugin(String pluginId);
 
-
   List<Activation> findActivationsByLicenseKey(String licenseKey);
 
   void saveActivation(Activation activation);
 
   void removeActivation(String licenseKey, String hardwareFingerprint);
-
 
   Session findSessionByToken(String token);
 
@@ -47,14 +40,11 @@ public interface DatabaseInterface {
 
   void removeSession(String token);
 
-
   void saveAuditLog(AuditLog auditLog);
 
   List<AuditLog> findAuditLogs(int limit);
 
-
   Map<String, Object> getStatistics();
-
 
   void saveUser(User user);
 
@@ -71,7 +61,6 @@ public interface DatabaseInterface {
   List<User> findAllUsers();
 
   void deleteUser(String userId);
-
 
   void saveUserSession(UserSession session);
 

@@ -47,7 +47,7 @@ jar xf "$(realpath "${JAR_FILE}")"
 
 echo -e "${GREEN}[INFO]${NC} Calculating JAR hash..."
 
-find . -type f \( -name "*.encrypted" -o -name "*.iv" -o -name "plugin.yml" -o -name "nebeniac-protection.properties" \) | sed 's|^\./||' | sort > files.txt
+find . -type f \( -name "*.encrypted" -o -name "*.iv" -o -name "plugin.yml" \) | sed 's|^\./||' | sort > files.txt
 
 {
     while IFS= read -r file; do

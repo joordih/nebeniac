@@ -9,8 +9,7 @@ import {CheckCircle, Clock, Copy, Eye, Key, Shield, XCircle} from 'lucide-react'
 import {useEffect, useState} from 'react'
 import {useAuth} from '../contexts/AuthContext.jsx'
 import {ERR_SERVER_CONNECTION} from '@/lib/utils.js'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 export default function UserLicenseManager({userId}) {
     const {getAuthHeaders} = useAuth()
@@ -113,7 +112,6 @@ export default function UserLicenseManager({userId}) {
 
     return (
         <div className="space-y-4">
-            {}
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-2xl font-bold">Mis Licencias</h2>
@@ -132,7 +130,6 @@ export default function UserLicenseManager({userId}) {
                 </Alert>
             )}
 
-            {}
             <div className="flex items-center space-x-2">
                 <Input
                     placeholder="Buscar licencias..."
@@ -142,7 +139,6 @@ export default function UserLicenseManager({userId}) {
                 />
             </div>
 
-            {}
             <Card>
                 <CardHeader>
                     <CardTitle>Licencias Generadas</CardTitle>
@@ -240,7 +236,6 @@ export default function UserLicenseManager({userId}) {
                 </CardContent>
             </Card>
 
-            {}
             <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
                 <DialogContent className="max-w-2xl">
                     <DialogHeader>
@@ -255,7 +250,6 @@ export default function UserLicenseManager({userId}) {
 
                     {selectedLicense && (
                         <div className="space-y-4">
-                            {}
                             <Card>
                                 <CardHeader>
                                     <CardTitle className="text-lg">License Information</CardTitle>
@@ -310,7 +304,6 @@ export default function UserLicenseManager({userId}) {
                                 </CardContent>
                             </Card>
 
-                            {}
                             <Card>
                                 <CardHeader>
                                     <CardTitle className="text-lg">Activations</CardTitle>

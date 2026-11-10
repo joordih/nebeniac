@@ -1,8 +1,7 @@
 import {useEffect, useState} from 'react'
 import {Navigate} from 'react-router-dom'
 import {Shield} from 'lucide-react'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 export default function SetupRedirect() {
     const [loading, setLoading] = useState(true)
@@ -20,7 +19,6 @@ export default function SetupRedirect() {
             if (data.success) {
                 setNeedsSetup(data.needsInitialSetup)
             } else {
-
                 setNeedsSetup(true)
             }
         } catch (err) {
@@ -42,7 +40,6 @@ export default function SetupRedirect() {
             </div>
         )
     }
-
 
     if (needsSetup) {
         return <Navigate to="/setup" replace/>

@@ -1,9 +1,14 @@
 package dev.neuralabs.auth.controller;
 
+import static dev.neuralabs.auth.controller.ControllerSupport.bearerClaims;
+import static dev.neuralabs.auth.controller.ControllerSupport.error;
+import static dev.neuralabs.auth.controller.ControllerSupport.isEncryptedPayload;
+import static dev.neuralabs.auth.controller.ControllerSupport.maskLicenseKey;
+
 import com.google.gson.Gson;
-import dev.neuralabs.auth.util.GsonUtil;
+import dev.neuralabs.auth.crypto.DecryptedPayload;
 import dev.neuralabs.auth.crypto.E2EEDecryptionService;
-import dev.neuralabs.auth.crypto.KeyEncryptionService;
+import dev.neuralabs.auth.crypto.E2EEResponseEncryption;
 import dev.neuralabs.auth.database.DatabaseConnection;
 import dev.neuralabs.auth.database.DatabaseInterface;
 import dev.neuralabs.auth.model.Activation;
@@ -11,56 +16,44 @@ import dev.neuralabs.auth.model.AuditLog;
 import dev.neuralabs.auth.model.License;
 import dev.neuralabs.auth.model.Session;
 import dev.neuralabs.auth.security.RateLimiter;
-import java.security.SecureRandom;
+import dev.neuralabs.auth.util.GsonUtil;
+import dev.neuralabs.auth.util.JWTUtil;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import spark.Request;
 import spark.Response;
 
 @Slf4j
 public class SimpleLicenseController {
-
     private final DatabaseInterface database;
     private final Gson gson;
     private final E2EEDecryptionService e2eeService;
-    private final KeyEncryptionService keyEncryptionService;
+    private final E2EEResponseEncryption responseEncryption;
 
-    // SECURITY: Rate limiters to prevent brute force and DoS attacks
     private final RateLimiter verificationRateLimiter;
     private final RateLimiter licenseRateLimiter;
 
-    public SimpleLicenseController() {
+    public SimpleLicenseController(
+            E2EEDecryptionService e2eeService,
+            E2EEResponseEncryption responseEncryption) {
         this.database = DatabaseConnection.getInstance().getDatabase();
-        this.gson = GsonUtil.build();
+        this.gson = GsonUtil.buildApi();
+        this.e2eeService = e2eeService;
+        this.responseEncryption = responseEncryption;
 
-        this.keyEncryptionService = new KeyEncryptionService();
-        E2EEDecryptionService tempE2EE = null;
-        try {
-            tempE2EE = new E2EEDecryptionService();
-            log.info(
-                    "E2EE Decryption Service initialized successfully in SimpleLicenseController");
-        } catch (Exception e) {
-            log.error(
-                    "Failed to initialize E2EE service: {}. E2EE will be disabled.",
-                    e.getMessage());
-        }
-        this.e2eeService = tempE2EE;
-
-        // Initialize rate limiters
         this.verificationRateLimiter = RateLimiter.Factory.forLicenseVerification();
         this.licenseRateLimiter = RateLimiter.Factory.forAuthentication();
     }
 
     public String verifyLicense(Request request, Response response) {
-        response.type("application/json");
-
-        // SECURITY: Apply rate limiting by IP address
         String clientIp = request.ip();
         if (!verificationRateLimiter.tryConsume(clientIp)) {
             log.warn("Rate limit exceeded for IP: {}", clientIp);
-            response.status(429); // Too Many Requests
+            response.status(429);
             return gson.toJson(
                     Map.of(
                             "success", false,
@@ -69,34 +62,32 @@ public class SimpleLicenseController {
         }
 
         try {
-            String requestBody = request.body();
-            VerifyRequest verifyRequest;
-
-            boolean e2eeEnabled = e2eeService != null && e2eeService.isReady();
-            if (e2eeEnabled) {
-                if (!isEncryptedPayload(requestBody)) {
-                    log.warn("Received plaintext license verification request while E2EE is enabled");
-                    return error(response, 415, "Encrypted payload required");
-                }
-                try {
-                    log.debug("Detected E2EE encrypted request, attempting to decrypt");
-                    String decryptedData = e2eeService.decryptToString(requestBody);
-                    verifyRequest = gson.fromJson(decryptedData, VerifyRequest.class);
-                    log.info("Successfully decrypted E2EE license verification request");
-                } catch (E2EEDecryptionService.E2EEException e) {
-                    log.error("Failed to decrypt E2EE payload: {}", e.getMessage());
-                    return error(response, 400, "Failed to decrypt request: " + e.getMessage());
-                }
-            } else {
-                log.debug("Processing plaintext license verification request (E2EE unavailable)");
-                verifyRequest = gson.fromJson(requestBody, VerifyRequest.class);
+            if (e2eeService == null || !e2eeService.isReady()) {
+                return error(response, 503, "E2EE service not available");
             }
+
+            String requestBody = request.body();
+            if (!isEncryptedPayload(requestBody)) {
+                log.warn("Rejected plaintext license verification request from {}", clientIp);
+                return error(response, 415, "Encrypted payload required");
+            }
+
+            DecryptedPayload payload;
+            try {
+                payload = e2eeService.decryptRequest(requestBody);
+            } catch (E2EEDecryptionService.E2EEException e) {
+                log.warn("Failed to decrypt license verification request: {}", e.getMessage());
+                return error(response, 400, "Failed to decrypt request");
+            }
+            VerifyRequest verifyRequest = gson.fromJson(payload.getData(), VerifyRequest.class);
 
             if (verifyRequest == null || verifyRequest.getLicenseKey() == null) {
                 return error(response, 400, "License key required");
             }
+            if (verifyRequest.getHardwareFingerprint() == null || verifyRequest.getHardwareFingerprint().isBlank()) {
+                return error(response, 400, "Hardware fingerprint required");
+            }
 
-            // SECURITY: Apply per-license rate limiting to prevent brute force
             String licenseKey = verifyRequest.getLicenseKey();
             if (!licenseRateLimiter.tryConsume(licenseKey)) {
                 log.warn("Rate limit exceeded for license key: {}", maskLicenseKey(licenseKey));
@@ -133,9 +124,7 @@ public class SimpleLicenseController {
                     verifyRequest.getLicenseKey());
             Activation existingActivation = activations
                     .stream()
-                    .filter(a -> a
-                            .getHardwareFingerprint()
-                            .equals(verifyRequest.getHardwareFingerprint()))
+                    .filter(a -> verifyRequest.getHardwareFingerprint().equals(a.getHardwareFingerprint()))
                     .findFirst()
                     .orElse(null);
 
@@ -169,16 +158,15 @@ public class SimpleLicenseController {
                             "New activation created for license: {}",
                             verifyRequest.getLicenseKey());
                 } catch (Exception e) {
-                    // Handle any duplicate key error or MongoDB exception
                     if (e.toString().contains("E11000") || e.toString().contains("duplicate")) {
-                        log.info("Activation already exists for license {} and hardware {}, updating last seen", 
-                                maskLicenseKey(verifyRequest.getLicenseKey()), 
+                        log.info("Activation already exists for license {} and hardware {}, updating last seen",
+                                maskLicenseKey(verifyRequest.getLicenseKey()),
                                 verifyRequest.getHardwareFingerprint().substring(0, 8) + "...");
-                        // Re-fetch the existing activation
+
                         activations = database.findActivationsByLicenseKey(verifyRequest.getLicenseKey());
                         existingActivation = activations
                             .stream()
-                            .filter(a -> a.getHardwareFingerprint().equals(verifyRequest.getHardwareFingerprint()))
+                            .filter(a -> verifyRequest.getHardwareFingerprint().equals(a.getHardwareFingerprint()))
                             .findFirst()
                             .orElse(null);
                         if (existingActivation != null) {
@@ -187,7 +175,7 @@ public class SimpleLicenseController {
                         }
                     } else {
                         log.error("Unexpected error saving activation: ", e);
-                        throw e; // Re-throw if it's not a duplicate error
+                        throw e;
                     }
                 }
             } else {
@@ -224,7 +212,7 @@ public class SimpleLicenseController {
             responseData.put("features", license.getFeatures());
             responseData.put("licenseType", license.getLicenseType());
 
-            return gson.toJson(responseData);
+            return responseEncryption.encryptResponse(responseData, payload);
         } catch (Exception e) {
             log.error("Error verifying license", e);
             return error(response, 500, "Internal server error");
@@ -232,8 +220,6 @@ public class SimpleLicenseController {
     }
 
     public String heartbeat(Request request, Response response) {
-        response.type("application/json");
-
         try {
             HeartbeatRequest heartbeatRequest = gson.fromJson(
                     request.body(),
@@ -246,7 +232,7 @@ public class SimpleLicenseController {
 
             Session session = database.findSessionByToken(
                     heartbeatRequest.getSessionToken());
-            if (session == null || !session.isActive()) {
+            if (session == null || !session.isValid()) {
                 return error(response, 404, "Session not found or inactive");
             }
 
@@ -262,8 +248,6 @@ public class SimpleLicenseController {
     }
 
     public String getLicenseInfo(Request request, Response response) {
-        response.type("application/json");
-
         try {
             String licenseKey = request.params(":key");
             License license = database.findLicenseByKey(licenseKey);
@@ -280,8 +264,6 @@ public class SimpleLicenseController {
     }
 
     public String getAllLicenses(Request request, Response response) {
-        response.type("application/json");
-
         try {
             List<License> licenses = database.findAllLicenses();
             return gson.toJson(
@@ -299,27 +281,22 @@ public class SimpleLicenseController {
     }
 
     public String createLicense(Request request, Response response) {
-        response.type("application/json");
-
         try {
-            License license = gson.fromJson(request.body(), License.class);
-
-            if (license.getLicenseKey() == null ||
-                    license.getLicenseKey().isEmpty()) {
-                license.setLicenseKey(generateUniqueLicenseKey());
+            LicenseRequest licenseRequest = gson.fromJson(request.body(), LicenseRequest.class);
+            if (licenseRequest == null || licenseRequest.getCustomerEmail() == null
+                    || licenseRequest.getCustomerEmail().isBlank()) {
+                return error(response, 400, "Customer email required");
             }
 
-            license.setCreatedAt(Date.from(Instant.now()));
-            license.setActive(true);
-            if (license.getPerLicenseSalt() == null || license.getPerLicenseSalt().isEmpty()) {
-                license.setPerLicenseSalt(generatePerLicenseSalt());
-            }
-            if (license.getEncryptionKey() != null && !license.getEncryptionKey().isEmpty()) {
-                license.setEncryptionKey(wrapEncryptionKey(license.getEncryptionKey()));
-            }
+            License license = License.builder()
+                    .licenseKey(generateUniqueLicenseKey())
+                    .createdAt(Date.from(Instant.now()))
+                    .active(true)
+                    .build();
+            licenseRequest.applyTo(license);
 
             database.saveLicense(license);
-            log.info("License created: {}", license.getLicenseKey());
+            log.info("License created: {}", maskLicenseKey(license.getLicenseKey()));
 
             return gson.toJson(Map.of("success", true, "license", license));
         } catch (Exception e) {
@@ -329,35 +306,24 @@ public class SimpleLicenseController {
     }
 
     public String updateLicense(Request request, Response response) {
-        response.type("application/json");
-
         try {
             String licenseKey = request.params(":key");
-            License existingLicense = database.findLicenseByKey(licenseKey);
+            License license = database.findLicenseByKey(licenseKey);
 
-            if (existingLicense == null) {
+            if (license == null) {
                 return error(response, 404, "License not found");
             }
 
-            License updatedLicense = gson.fromJson(
-                    request.body(),
-                    License.class);
-            updatedLicense.setLicenseKey(licenseKey);
-            if (updatedLicense.getPerLicenseSalt() == null || updatedLicense.getPerLicenseSalt().isEmpty()) {
-                updatedLicense.setPerLicenseSalt(existingLicense.getPerLicenseSalt() != null
-                        ? existingLicense.getPerLicenseSalt()
-                        : generatePerLicenseSalt());
+            LicenseRequest licenseRequest = gson.fromJson(request.body(), LicenseRequest.class);
+            if (licenseRequest == null) {
+                return error(response, 400, "License data required");
             }
-            if (updatedLicense.getEncryptionKey() != null && !updatedLicense.getEncryptionKey().isEmpty()) {
-                updatedLicense.setEncryptionKey(wrapEncryptionKey(updatedLicense.getEncryptionKey()));
-            } else {
-                updatedLicense.setEncryptionKey(existingLicense.getEncryptionKey());
-            }
+            licenseRequest.applyTo(license);
+            license.setUpdatedAt(Date.from(Instant.now()));
 
-            database.saveLicense(updatedLicense);
+            database.saveLicense(license);
 
-            return gson.toJson(
-                    Map.of("success", true, "license", updatedLicense));
+            return gson.toJson(Map.of("success", true, "license", license));
         } catch (Exception e) {
             log.error("Error updating license", e);
             return error(response, 500, "Error updating license");
@@ -365,8 +331,6 @@ public class SimpleLicenseController {
     }
 
     public String deleteLicense(Request request, Response response) {
-        response.type("application/json");
-
         try {
             String licenseKey = request.params(":key");
             database.deleteLicense(licenseKey);
@@ -380,8 +344,6 @@ public class SimpleLicenseController {
     }
 
     public String getStatistics(Request request, Response response) {
-        response.type("application/json");
-
         try {
             long totalLicenses = database.findAllLicenses().size();
             Map<String, Object> stats = Map.of("totalLicenses", totalLicenses);
@@ -394,8 +356,6 @@ public class SimpleLicenseController {
     }
 
     public String generateNewLicense(Request request, Response response) {
-        response.type("application/json");
-
         try {
             GenerateLicenseRequest genRequest = gson.fromJson(
                     request.body(),
@@ -410,7 +370,6 @@ public class SimpleLicenseController {
                     .active(true)
                     .createdAt(Date.from(Instant.now()))
                     .expiresAt(genRequest.getExpiresAt())
-                    .perLicenseSalt(generatePerLicenseSalt())
                     .encryptionMetadata(
                             genRequest.getMetadata() != null
                                     ? genRequest.getMetadata()
@@ -429,10 +388,12 @@ public class SimpleLicenseController {
     }
 
     public String getUserLicenses(Request request, Response response) {
-        response.type("application/json");
-
         try {
             String userId = request.params(":userId");
+            JWTUtil.JWTClaims claims = bearerClaims(request);
+            if (!claims.isAdmin() && !claims.getUserId().equals(userId)) {
+                return error(response, 403, "Insufficient permissions");
+            }
             String userEmail = userId + "@nebeniac.local";
             List<License> allLicenses = database.findAllLicenses();
             List<License> licenses = allLicenses
@@ -455,8 +416,6 @@ public class SimpleLicenseController {
     }
 
     public String getPublicKey(Request request, Response response) {
-        response.type("application/json");
-
         try {
             if (e2eeService == null || !e2eeService.isReady()) {
                 return error(response, 503, "E2EE service not available");
@@ -469,8 +428,6 @@ public class SimpleLicenseController {
                             true,
                             "publicKey",
                             publicKeyJson,
-                            "keyPath",
-                            e2eeService.getPublicKeyFilePath(),
                             "version",
                             "1.0"));
         } catch (Exception e) {
@@ -480,8 +437,6 @@ public class SimpleLicenseController {
     }
 
     public String getE2EEStats(Request request, Response response) {
-        response.type("application/json");
-
         try {
             if (e2eeService == null) {
                 return gson.toJson(
@@ -498,14 +453,6 @@ public class SimpleLicenseController {
             log.error("Error getting E2EE stats", e);
             return error(response, 500, "Failed to retrieve stats");
         }
-    }
-
-    private boolean isEncryptedPayload(String body) {
-        if (body == null || body.isEmpty()) {
-            return false;
-        }
-
-        return (body.contains("\"ciphertext\"") && body.contains("\"timestamp\""));
     }
 
     private void logAuditEvent(
@@ -534,19 +481,6 @@ public class SimpleLicenseController {
         return UUID.randomUUID().toString();
     }
 
-    private String wrapEncryptionKey(String plaintextKey) {
-        if (plaintextKey == null || plaintextKey.isEmpty()) {
-            return null;
-        }
-        return keyEncryptionService.wrapKey(plaintextKey);
-    }
-
-    private String generatePerLicenseSalt() {
-        byte[] salt = new byte[32];
-        new SecureRandom().nextBytes(salt);
-        return Base64.getEncoder().encodeToString(salt);
-    }
-
     private String generateUniqueLicenseKey() {
         return ("LIC-" +
                 UUID.randomUUID().toString().toUpperCase().substring(0, 8) +
@@ -554,194 +488,69 @@ public class SimpleLicenseController {
                 UUID.randomUUID().toString().toUpperCase().substring(0, 8));
     }
 
-    // SECURITY: Mask license key for logging to prevent exposure
-    private String maskLicenseKey(String licenseKey) {
-        if (licenseKey == null || licenseKey.length() < 8) {
-            return "***";
-        }
-        return licenseKey.substring(0, 4) + "***" + licenseKey.substring(licenseKey.length() - 4);
-    }
-
-    private String error(Response response, int status, String message) {
-        response.status(status);
-        return gson.toJson(Map.of("success", false, "error", message));
-    }
-
+    @Getter
+    @Setter
     public static class VerifyRequest {
-
         private String licenseKey;
         private String hardwareFingerprint;
         private ServerInfo serverInfo;
         private String pluginVersion;
         private long clientTimestamp;
-
-        public String getLicenseKey() {
-            return licenseKey;
-        }
-
-        public void setLicenseKey(String licenseKey) {
-            this.licenseKey = licenseKey;
-        }
-
-        public String getHardwareFingerprint() {
-            return hardwareFingerprint;
-        }
-
-        public void setHardwareFingerprint(String hardwareFingerprint) {
-            this.hardwareFingerprint = hardwareFingerprint;
-        }
-
-        public ServerInfo getServerInfo() {
-            return serverInfo;
-        }
-
-        public void setServerInfo(ServerInfo serverInfo) {
-            this.serverInfo = serverInfo;
-        }
-
-        public String getPluginVersion() {
-            return pluginVersion;
-        }
-
-        public void setPluginVersion(String pluginVersion) {
-            this.pluginVersion = pluginVersion;
-        }
-
-        public long getClientTimestamp() {
-            return clientTimestamp;
-        }
-
-        public void setClientTimestamp(long clientTimestamp) {
-            this.clientTimestamp = clientTimestamp;
-        }
     }
 
+    @Getter
+    @Setter
     public static class ServerInfo {
-
         private String serverName;
         private int serverPort;
         private String minecraftVersion;
         private String serverSoftware;
+    }
 
-        public String getServerName() {
-            return serverName;
-        }
+    @Getter
+    @Setter
+    public static class LicenseRequest {
+        private String customerEmail;
+        private String customerName;
+        private String licenseType;
+        private Integer maxActivations;
+        private List<String> features;
+        private Date expiresAt;
+        private String notes;
+        private String pluginId;
+        private List<String> targetPackages;
+        private Boolean active;
 
-        public void setServerName(String serverName) {
-            this.serverName = serverName;
-        }
-
-        public int getServerPort() {
-            return serverPort;
-        }
-
-        public void setServerPort(int serverPort) {
-            this.serverPort = serverPort;
-        }
-
-        public String getMinecraftVersion() {
-            return minecraftVersion;
-        }
-
-        public void setMinecraftVersion(String minecraftVersion) {
-            this.minecraftVersion = minecraftVersion;
-        }
-
-        public String getServerSoftware() {
-            return serverSoftware;
-        }
-
-        public void setServerSoftware(String serverSoftware) {
-            this.serverSoftware = serverSoftware;
+        void applyTo(License license) {
+            if (customerEmail != null) license.setCustomerEmail(customerEmail.trim());
+            if (customerName != null) license.setCustomerName(customerName);
+            if (licenseType != null) license.setLicenseType(licenseType);
+            if (maxActivations != null) license.setMaxActivations(Math.max(1, maxActivations));
+            if (features != null) license.setFeatures(features);
+            if (expiresAt != null) license.setExpiresAt(expiresAt);
+            if (notes != null) license.setNotes(notes);
+            if (pluginId != null) license.setPluginId(pluginId);
+            if (targetPackages != null) license.setTargetPackages(targetPackages);
+            if (active != null) license.setActive(active);
         }
     }
 
+    @Getter
+    @Setter
     public static class HeartbeatRequest {
-
         private String sessionToken;
         private String licenseKey;
         private String hardwareFingerprint;
         private long clientTimestamp;
-
-        public String getSessionToken() {
-            return sessionToken;
-        }
-
-        public void setSessionToken(String sessionToken) {
-            this.sessionToken = sessionToken;
-        }
-
-        public String getLicenseKey() {
-            return licenseKey;
-        }
-
-        public void setLicenseKey(String licenseKey) {
-            this.licenseKey = licenseKey;
-        }
-
-        public String getHardwareFingerprint() {
-            return hardwareFingerprint;
-        }
-
-        public void setHardwareFingerprint(String hardwareFingerprint) {
-            this.hardwareFingerprint = hardwareFingerprint;
-        }
-
-        public long getClientTimestamp() {
-            return clientTimestamp;
-        }
-
-        public void setClientTimestamp(long clientTimestamp) {
-            this.clientTimestamp = clientTimestamp;
-        }
     }
 
+    @Getter
+    @Setter
     public static class GenerateLicenseRequest {
-
         private String userId;
         private String pluginId;
         private String pluginVersion;
         private Date expiresAt;
         private Map<String, Object> metadata;
-
-        public String getUserId() {
-            return userId;
-        }
-
-        public void setUserId(String userId) {
-            this.userId = userId;
-        }
-
-        public String getPluginId() {
-            return pluginId;
-        }
-
-        public void setPluginId(String pluginId) {
-            this.pluginId = pluginId;
-        }
-
-        public String getPluginVersion() {
-            return pluginVersion;
-        }
-
-        public void setPluginVersion(String pluginVersion) {
-            this.pluginVersion = pluginVersion;
-        }
-
-        public Date getExpiresAt() {
-            return expiresAt;
-        }
-
-        public void setExpiresAt(Date expiresAt) {
-            this.expiresAt = expiresAt;
-        }
-
-        public Map<String, Object> getMetadata() {
-            return metadata;
-        }
-
-        public void setMetadata(Map<String, Object> metadata) {
-            this.metadata = metadata;
-        }
     }
 }

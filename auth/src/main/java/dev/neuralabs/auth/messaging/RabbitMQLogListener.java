@@ -6,6 +6,8 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DeliverCallback;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -18,7 +20,6 @@ import java.util.function.Consumer;
 
 @Slf4j
 public class RabbitMQLogListener implements AutoCloseable {
-
   private static final String EXCHANGE_NAME = "nebeniac.protector.logs";
 
   private Connection connection;
@@ -62,7 +63,6 @@ public class RabbitMQLogListener implements AutoCloseable {
 
         log.info("RabbitMQ connection established successfully");
         return;
-
       } catch (Exception e) {
         if (attempt == maxRetries) {
           log.error("Failed to initialize RabbitMQ connection after {} attempts", maxRetries, e);
@@ -117,7 +117,6 @@ public class RabbitMQLogListener implements AutoCloseable {
       });
 
       log.info("Started listening for session: {}", sessionId);
-
     } catch (IOException e) {
       log.error("Failed to start listening for session: {}", sessionId, e);
     }
@@ -140,7 +139,6 @@ public class RabbitMQLogListener implements AutoCloseable {
           handleLogMessage(sessionId, json);
           break;
       }
-
     } catch (Exception e) {
       log.error("Error handling message for session {}: {}", sessionId, message, e);
     }
@@ -162,10 +160,9 @@ public class RabbitMQLogListener implements AutoCloseable {
     String outputPath = json.has("outputPath") ? json.get("outputPath").getAsString() : null;
     String message = json.has("message") ? json.get("message").getAsString() : "";
     String encryptionId = json.has("encryptionId") ? json.get("encryptionId").getAsString() : null;
-    String encryptionKey = json.has("encryptionKey") ? json.get("encryptionKey").getAsString() : null;
     String signature = json.has("signature") ? json.get("signature").getAsString() : null;
 
-    CompletionMessage completion = new CompletionMessage(success, outputPath, message, encryptionId, encryptionKey, signature);
+    CompletionMessage completion = new CompletionMessage(success, outputPath, message, encryptionId, signature);
 
     Consumer<CompletionMessage> callback = completionCallbacks.get(sessionId);
     if (callback != null) {
@@ -189,13 +186,6 @@ public class RabbitMQLogListener implements AutoCloseable {
     }
   }
 
-  public void stopListeningForSession(String sessionId) {
-    sessionCallbacks.remove(sessionId);
-    completionCallbacks.remove(sessionId);
-    progressCallbacks.remove(sessionId);
-    log.info("Stopped listening for session: {}", sessionId);
-  }
-
   @Override
   public void close() {
     try {
@@ -211,45 +201,13 @@ public class RabbitMQLogListener implements AutoCloseable {
     }
   }
 
+  @Getter
+  @AllArgsConstructor
   public static class CompletionMessage {
     private final boolean success;
     private final String outputPath;
     private final String message;
     private final String encryptionId;
-    private final String encryptionKey;
     private final String signature;
-
-    public CompletionMessage(boolean success, String outputPath, String message, String encryptionId, String encryptionKey, String signature) {
-      this.success = success;
-      this.outputPath = outputPath;
-      this.message = message;
-      this.encryptionId = encryptionId;
-      this.encryptionKey = encryptionKey;
-      this.signature = signature;
-    }
-
-    public boolean isSuccess() {
-      return success;
-    }
-
-    public String getOutputPath() {
-      return outputPath;
-    }
-
-    public String getMessage() {
-      return message;
-    }
-
-    public String getEncryptionId() {
-      return encryptionId;
-    }
-
-    public String getEncryptionKey() {
-      return encryptionKey;
-    }
-
-    public String getSignature() {
-      return signature;
-    }
   }
 }

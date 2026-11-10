@@ -5,7 +5,9 @@ import com.google.gson.GsonBuilder;
 import dev.neuralabs.loader.crypto.e2ee.E2EEResponseDecryptor;
 import dev.neuralabs.loader.crypto.e2ee.TinkE2EEClient;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -19,24 +21,18 @@ import lombok.NoArgsConstructor;
 import lombok.Value;
 
 public class BackendService {
-
   private final String serverUrl;
   private final HttpClient httpClient;
   private final Gson gson;
   private final Logger logger;
   private final TinkE2EEClient e2eeClient;
-  private final E2EEResponseDecryptor responseDecryptor;
-  private final boolean e2eeEnabled;
-  private final boolean requireE2EE;
 
   public BackendService(String serverUrl, Logger logger) {
-    this(serverUrl, logger, true); // SECURITY: E2EE required by default
-  }
-
-  public BackendService(String serverUrl, Logger logger, boolean requireE2EE) {
-    this.serverUrl = serverUrl.endsWith("/")
+    String normalized = serverUrl.endsWith("/")
         ? serverUrl.substring(0, serverUrl.length() - 1)
         : serverUrl;
+    requireSecureTransport(normalized);
+    this.serverUrl = normalized;
     this.logger = logger;
     this.httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
@@ -44,263 +40,136 @@ public class BackendService {
     this.gson = new GsonBuilder()
         .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
         .create();
-    this.requireE2EE = requireE2EE;
 
-    TinkE2EEClient tempE2EE = null;
-    boolean tempEnabled = false;
-    try {
-      tempE2EE = new TinkE2EEClient(logger);
-      if (tempE2EE.isInitialized()) {
-        tempEnabled = true;
-        logger.info(
-            "E2EE encryption enabled for backend communication");
-      } else {
-        logger.warning("E2EE client initialized but not ready");
-      }
-    } catch (Exception e) {
-      logger.warning(
-          "Failed to initialize E2EE client: " + e.getMessage());
+    this.e2eeClient = new TinkE2EEClient(logger);
+    if (!e2eeClient.isInitialized()) {
+      throw new IllegalStateException("E2EE client could not be initialized; refusing to contact the backend");
     }
-
-    // SECURITY FIX: Enforce E2EE requirement - do not fall back to plaintext
-    if (this.requireE2EE && !tempEnabled) {
-      throw new IllegalStateException(
-          "E2EE is required but not available. Cannot proceed with plaintext communication for security reasons.");
-    }
-
-    this.e2eeClient = tempE2EE;
-    this.e2eeEnabled = tempEnabled;
-
-    E2EEResponseDecryptor tempDecryptor = null;
-    if (tempEnabled) {
-      try {
-        tempDecryptor = new E2EEResponseDecryptor(logger);
-        logger.info("E2EE response decryption enabled");
-      } catch (Exception e) {
-        logger.warning(
-            "Failed to initialize response decryptor: " + e.getMessage());
-        if (requireE2EE) {
-          throw new IllegalStateException(
-              "E2EE response decryptor is required but failed to initialize");
-        }
-      }
-    }
-    this.responseDecryptor = tempDecryptor;
+    logger.info("E2EE encryption enabled for backend communication");
   }
 
   public PluginMetadata getPluginMetadata(
       String licenseKey,
       String hardwareFingerprint,
       String sessionToken) throws IOException {
-    try {
-      MetadataRequest request = new MetadataRequest();
-      request.setLicenseKey(licenseKey);
-      request.setHardwareFingerprint(hardwareFingerprint);
-      request.setSessionToken(sessionToken);
+    MetadataRequest request = new MetadataRequest(licenseKey, hardwareFingerprint, sessionToken);
+    MetadataResponse metadataResponse = postEncrypted("/api/v1/plugins/metadata", request, MetadataResponse.class);
 
-      String requestBody = gson.toJson(request);
-
-      if (e2eeEnabled && e2eeClient != null) {
-        try {
-          requestBody = e2eeClient.encryptPayload(requestBody);
-          logger.info("Encrypted metadata request with E2EE");
-        } catch (GeneralSecurityException e) {
-          if (this.requireE2EE) {
-            throw new IllegalStateException("E2EE is required but request encryption failed: " + e.getMessage(), e);
-          } else {
-            logger.warning("Failed to encrypt request, proceeding without E2EE: " + e.getMessage());
-          }
-        }
-      }
-
-      HttpRequest httpRequest = HttpRequest.newBuilder()
-          .uri(URI.create(serverUrl + "/api/v1/plugins/metadata"))
-          .header("Content-Type", "application/json")
-          .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-          .timeout(Duration.ofSeconds(30))
-          .build();
-
-      HttpResponse<String> response = httpClient.send(
-          httpRequest,
-          HttpResponse.BodyHandlers.ofString());
-
-      if (response.statusCode() == 200) {
-
-        String responseBody = decryptResponseIfNeeded(
-
-            response.body(),
-
-            sessionToken);
-
-        MetadataResponse metadataResponse = gson.fromJson(
-            responseBody,
-            MetadataResponse.class);
-        if (metadataResponse.isSuccess()) {
-          logger.info(
-              "Plugin metadata retrieved successfully for plugin: " +
-                  metadataResponse.getPluginId());
-          return new PluginMetadata(
-              metadataResponse.getPluginId(),
-              metadataResponse.getEncryptionKey(),
-              metadataResponse.getOriginalMainClass(),
-              metadataResponse.getPluginName(),
-              metadataResponse.getPluginVersion(),
-              metadataResponse.getTargetPackages());
-        } else {
-          throw new IOException(
-              "Backend error: " + metadataResponse.getError());
-        }
-      } else {
-        logger.warning(
-            "Failed to get plugin metadata. Status: " +
-                response.statusCode() +
-                ", Body: " +
-                response.body());
-        throw new IOException(
-            "Failed to get plugin metadata: HTTP " +
-                response.statusCode());
-      }
-
-    } catch (InterruptedException e) {
-
-      Thread.currentThread().interrupt();
-
-      throw new IOException("Request interrupted", e);
-
-    } finally {
-
-      if (sessionToken != null) {
-        clearSessionKey(sessionToken);
-      }
+    if (metadataResponse == null || !metadataResponse.isSuccess()) {
+      throw new IOException("Backend error: " + (metadataResponse != null ? metadataResponse.getError() : "empty response"));
     }
+
+    logger.info("Plugin metadata retrieved successfully for plugin: " + metadataResponse.getPluginId());
+    return new PluginMetadata(
+        metadataResponse.getPluginId(),
+        metadataResponse.getEncryptionKey(),
+        metadataResponse.getOriginalMainClass(),
+        metadataResponse.getPluginName(),
+        metadataResponse.getPluginVersion(),
+        metadataResponse.getTargetPackages());
   }
 
   public LicenseVerificationResult verifyLicense(
       String licenseKey,
       String hardwareFingerprint,
       ServerInfo serverInfo) throws IOException {
+    VerifyRequest request = new VerifyRequest(
+        licenseKey, hardwareFingerprint, serverInfo, "1.0.0", System.currentTimeMillis());
+
+    VerifyResponse verifyResponse;
     try {
-      VerifyRequest request = new VerifyRequest();
-      request.setLicenseKey(licenseKey);
-      request.setHardwareFingerprint(hardwareFingerprint);
-      request.setServerInfo(serverInfo);
-      request.setPluginVersion("1.0.0");
-      request.setClientTimestamp(System.currentTimeMillis());
+      verifyResponse = postEncrypted("/api/v1/verify", request, VerifyResponse.class);
+    } catch (BackendHttpException e) {
+      logger.warning("License verification failed. Status: " + e.getStatusCode());
+      return new LicenseVerificationResult(false, null, 0, null, null, "HTTP " + e.getStatusCode());
+    }
 
-      String requestBody = gson.toJson(request);
+    if (verifyResponse == null || !verifyResponse.isSuccess()) {
+      return new LicenseVerificationResult(false, null, 0, null, null,
+          verifyResponse != null ? verifyResponse.getError() : "empty response");
+    }
 
-      if (e2eeEnabled && e2eeClient != null) {
-        try {
-          requestBody = e2eeClient.encryptPayload(requestBody);
-          logger.info(
-              "Encrypted license verification request with E2EE");
-        } catch (GeneralSecurityException e) {
-          if (this.requireE2EE) {
-            throw new IllegalStateException("E2EE is required but request encryption failed: " + e.getMessage(), e);
-          } else {
-            logger.warning("Failed to encrypt request, proceeding without E2EE: " + e.getMessage());
-          }
-        }
-      }
+    logger.info("License verified successfully");
+    return new LicenseVerificationResult(
+        true,
+        verifyResponse.getSessionToken(),
+        verifyResponse.getExpiresIn(),
+        verifyResponse.getFeatures(),
+        verifyResponse.getLicenseType(),
+        null);
+  }
 
+  private <T> T postEncrypted(String path, Object payload, Class<T> responseType) throws IOException {
+    TinkE2EEClient.EncryptedRequest encrypted;
+    try {
+      encrypted = e2eeClient.encryptPayload(gson.toJson(payload));
+    } catch (GeneralSecurityException e) {
+      throw new IOException("Request encryption failed", e);
+    }
+
+    try {
       HttpRequest httpRequest = HttpRequest.newBuilder()
-          .uri(URI.create(serverUrl + "/api/v1/verify"))
+          .uri(URI.create(serverUrl + path))
           .header("Content-Type", "application/json")
-          .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+          .POST(HttpRequest.BodyPublishers.ofString(encrypted.getBody()))
           .timeout(Duration.ofSeconds(30))
           .build();
 
-      HttpResponse<String> response = httpClient.send(
-          httpRequest,
-          HttpResponse.BodyHandlers.ofString());
-
-      if (response.statusCode() == 200) {
-
-        String responseBody = decryptResponseIfNeeded(
-            response.body(),
-            null);
-
-        VerifyResponse verifyResponse = gson.fromJson(
-            responseBody,
-            VerifyResponse.class);
-        if (verifyResponse.isSuccess()) {
-          logger.info("License verified successfully");
-          return new LicenseVerificationResult(
-              true,
-              verifyResponse.getSessionToken(),
-              verifyResponse.getExpiresIn(),
-              verifyResponse.getFeatures(),
-              verifyResponse.getLicenseType(),
-              null);
-        } else {
-          return new LicenseVerificationResult(
-              false,
-              null,
-              0,
-              null,
-              null,
-              verifyResponse.getError());
-        }
-      } else {
-        logger.warning(
-            "License verification failed. Status: " +
-                response.statusCode());
-        return new LicenseVerificationResult(
-            false,
-            null,
-            0,
-            null,
-            null,
-            "HTTP " + response.statusCode());
+      HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() != 200) {
+        throw new BackendHttpException(response.statusCode());
       }
+
+      String plaintext = E2EEResponseDecryptor.decrypt(response.body(), encrypted);
+      return gson.fromJson(plaintext, responseType);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IOException("Request interrupted", e);
-    }
-  }
-
-  private String decryptResponseIfNeeded(
-      String responseBody,
-      String sessionToken) {
-    if (responseDecryptor == null || !responseDecryptor.isInitialized()) {
-      return responseBody;
-    }
-
-    if (!responseDecryptor.isEncryptedResponse(responseBody)) {
-
-      if (sessionToken == null || sessionToken.isEmpty()) {
-
-        logger.fine("Received plaintext response from backend; proceeding without decryption (no session token)");
-        return responseBody;
-      }
-      throw new IllegalStateException("Expected encrypted response from backend but received plaintext");
-
-    }
-
-    try {
-      String decrypted = responseDecryptor.decryptResponse(
-          responseBody,
-          sessionToken);
-      logger.fine("Successfully decrypted server response");
-      return decrypted;
     } catch (E2EEResponseDecryptor.DecryptionException e) {
-      throw new IllegalStateException("Failed to decrypt E2EE response", e);
+      throw new IOException("Rejected backend response: " + e.getMessage(), e);
+    } finally {
+      encrypted.destroy();
     }
   }
 
-  public void clearSessionKey(String sessionToken) {
-    if (responseDecryptor != null) {
-      responseDecryptor.clearSessionKey(sessionToken);
+  private static void requireSecureTransport(String serverUrl) {
+    URI uri = URI.create(serverUrl);
+    String scheme = uri.getScheme();
+    if ("https".equalsIgnoreCase(scheme)) {
+      return;
+    }
+    if ("http".equalsIgnoreCase(scheme) && isLoopback(uri.getHost())) {
+      return;
+    }
+    throw new IllegalStateException("Backend server-url must use https:// (plain http is only allowed for localhost)");
+  }
+
+  private static boolean isLoopback(String host) {
+    if (host == null) {
+      return false;
+    }
+    try {
+      return InetAddress.getByName(host).isLoopbackAddress();
+    } catch (UnknownHostException e) {
+      return false;
     }
   }
 
-  public boolean isE2EEEnabled() {
-    return e2eeEnabled;
+  public static final class BackendHttpException extends IOException {
+    private final int statusCode;
+
+    BackendHttpException(int statusCode) {
+      super("Backend returned HTTP " + statusCode);
+      this.statusCode = statusCode;
+    }
+
+    public int getStatusCode() {
+      return statusCode;
+    }
   }
 
   @Value
   public static class PluginMetadata {
-
     String pluginId;
     String encryptionKey;
     String originalMainClass;
@@ -312,7 +181,6 @@ public class BackendService {
   @Data
   @AllArgsConstructor
   public static class LicenseVerificationResult {
-
     private final boolean success;
     private final String sessionToken;
     private final int expiresIn;
@@ -325,7 +193,6 @@ public class BackendService {
   @NoArgsConstructor
   @AllArgsConstructor
   public static class ServerInfo {
-
     private String serverName;
     private int serverPort;
     private String minecraftVersion;
@@ -336,7 +203,6 @@ public class BackendService {
   @NoArgsConstructor
   @AllArgsConstructor
   private static class MetadataRequest {
-
     private String licenseKey;
     private String hardwareFingerprint;
     private String sessionToken;
@@ -346,7 +212,6 @@ public class BackendService {
   @NoArgsConstructor
   @AllArgsConstructor
   private static class MetadataResponse {
-
     private boolean success;
     private String pluginId;
     private String encryptionKey;
@@ -361,7 +226,6 @@ public class BackendService {
   @NoArgsConstructor
   @AllArgsConstructor
   private static class VerifyRequest {
-
     private String licenseKey;
     private String hardwareFingerprint;
     private ServerInfo serverInfo;
@@ -373,7 +237,6 @@ public class BackendService {
   @NoArgsConstructor
   @AllArgsConstructor
   private static class VerifyResponse {
-
     private boolean success;
     private String sessionToken;
     private int expiresIn;

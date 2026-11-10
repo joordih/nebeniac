@@ -8,8 +8,7 @@ import {Button} from '@/components/ui/button.jsx'
 import {Badge} from '@/components/ui/badge.jsx'
 import {Popover, PopoverContent, PopoverTrigger,} from '@/components/ui/popover.jsx'
 import {Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,} from '@/components/ui/command.jsx'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 export default function UserCombobox({selectedUser, onUserSelect, placeholder = "Seleccionar usuario..."}) {
     const {getAuthHeaders} = useAuth()

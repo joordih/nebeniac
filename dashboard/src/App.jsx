@@ -14,12 +14,10 @@ function App() {
         <AuthProvider>
             <Router>
                 <Routes>
-                    {}
                     <Route path="/login" element={<LoginForm/>}/>
                     <Route path="/complete-registration" element={<CompleteRegistration/>}/>
                     <Route path="/setup" element={<InitialSetup/>}/>
 
-                    {}
                     <Route path="/admin/*" element={
                         <ProtectedRoute requireAdmin={true}>
                             <AdminDashboard/>
@@ -32,7 +30,6 @@ function App() {
                         </ProtectedRoute>
                     }/>
 
-                    {}
                     <Route path="/" element={<SetupRedirect/>}/>
                 </Routes>
             </Router>

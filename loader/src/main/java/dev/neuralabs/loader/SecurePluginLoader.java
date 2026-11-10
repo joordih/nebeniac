@@ -1,9 +1,6 @@
 package dev.neuralabs.loader;
 
-import dev.neuralabs.loader.crypto.CryptoProvider;
-import dev.neuralabs.loader.crypto.CryptoProviderFactory;
 import dev.neuralabs.loader.license.HardwareFingerprint;
-import dev.neuralabs.loader.manager.SecurePluginManager;
 import dev.neuralabs.loader.protection.BackendProtectionInfo;
 import dev.neuralabs.loader.protection.JavaAgentDetector;
 import dev.neuralabs.loader.protection.JarSignatureVerifier;
@@ -14,6 +11,7 @@ import org.yaml.snakeyaml.Yaml;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
@@ -23,43 +21,38 @@ import java.security.Security;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class SecurePluginLoader extends JavaPlugin {
-
   private Logger logger;
-  private SecurePluginManager pluginManager;
-  private CryptoProvider cryptoProvider;
   private BackendService backendService;
   private HardwareFingerprint hardwareFingerprint;
   private String fingerprintSalt;
   private PublicKey trustedSignatureKey;
+  private final Map<JavaPlugin, SecurePluginClassLoader> loadedPlugins = new ConcurrentHashMap<>();
 
   @Override
   public void onEnable() {
     logger = getLogger();
     logger.info("Iniciando SecurePluginLoader...");
 
-    // Registrar BouncyCastle como proveedor de seguridad para Ed25519
     if (Security.getProvider("BC") == null) {
       Security.addProvider(new BouncyCastleProvider());
       logger.info("BouncyCastle provider registered for Ed25519 support");
     }
 
     saveDefaultConfig();
-    
-    // Sincronizar valores de seguridad del JAR al config en disco
+
     syncSecurityValuesFromJar();
 
     try {
       runAgentDetection();
       initializeSecuritySettings();
       initializeBackendService();
-      initializeCryptoProvider();
-      initializePluginManager();
       loadSecurePlugins();
 
       logger.info("SecurePluginLoader started successfully");
@@ -73,60 +66,59 @@ public class SecurePluginLoader extends JavaPlugin {
   public void onDisable() {
     logger.info("Disabling SecurePluginLoader...");
 
-    if (pluginManager != null) {
-      pluginManager.shutdown();
+    for (Map.Entry<JavaPlugin, SecurePluginClassLoader> entry : loadedPlugins.entrySet()) {
+      if (entry.getKey().isEnabled()) {
+        getServer().getPluginManager().disablePlugin(entry.getKey());
+      }
+      try {
+        entry.getValue().close();
+      } catch (IOException e) {
+        logger.log(Level.WARNING, "Failed to close class loader for " + entry.getKey().getName(), e);
+      }
     }
+    loadedPlugins.clear();
 
     logger.info("SecurePluginLoader disabled");
   }
 
-  /**
-   * Sincroniza los valores de seguridad del config.yml dentro del JAR 
-   * al config.yml en disco, sobrescribiendo valores antiguos
-   */
   @SuppressWarnings("unchecked")
   private void syncSecurityValuesFromJar() {
     try {
-      // Obtener el path del JAR del plugin
       File jarFile = getFile();
-      
+
       logger.info("Syncing security values from JAR to disk config...");
-      
-      // Leer config.yml del JAR
+
       try (JarFile jar = new JarFile(jarFile)) {
         JarEntry configEntry = jar.getJarEntry("config.yml");
         if (configEntry == null) {
           logger.warning("config.yml not found in JAR, skipping security sync");
           return;
         }
-        
-        // Cargar config del JAR
+
         Yaml yaml = new Yaml();
         Object loadedData;
         try (InputStream is = jar.getInputStream(configEntry)) {
           loadedData = yaml.load(is);
         }
-        
+
         if (!(loadedData instanceof Map)) {
           logger.warning("Invalid config.yml format in JAR");
           return;
         }
-        
+
         Map<String, Object> jarConfig = (Map<String, Object>) loadedData;
-        
-        // Extraer valores de seguridad del JAR
+
         Map<String, Object> jarSecurity = getNestedMap(jarConfig, "security");
         if (jarSecurity == null) {
           logger.fine("No security section found in JAR config");
           return;
         }
-        
+
         String jarSignatureKey = (String) jarSecurity.get("signature-public-key");
         String jarFingerprintSalt = (String) jarSecurity.get("hardware-fingerprint-salt");
-        
+
         boolean updated = false;
-        
-        // SIEMPRE actualizar signature-public-key si existe en el JAR (sobrescribir el valor anterior)
+
         if (jarSignatureKey != null && !jarSignatureKey.isBlank()) {
           String currentKey = getConfig().getString("security.signature-public-key");
           logger.info("FORCE updating security.signature-public-key from JAR");
@@ -135,8 +127,7 @@ public class SecurePluginLoader extends JavaPlugin {
           logger.info("  Updated to: " + jarSignatureKey.substring(0, Math.min(20, jarSignatureKey.length())) + "...");
           updated = true;
         }
-        
-        // SIEMPRE actualizar hardware-fingerprint-salt si existe en el JAR (sobrescribir el valor anterior)
+
         if (jarFingerprintSalt != null && !jarFingerprintSalt.isBlank()) {
           String currentSalt = getConfig().getString("security.hardware-fingerprint-salt");
           logger.info("FORCE updating security.hardware-fingerprint-salt from JAR");
@@ -145,8 +136,7 @@ public class SecurePluginLoader extends JavaPlugin {
           logger.info("  Updated to: " + jarFingerprintSalt.substring(0, Math.min(16, jarFingerprintSalt.length())) + "...");
           updated = true;
         }
-        
-        // Save ONLY the security changes (all other config values are preserved)
+
         if (updated) {
           saveConfig();
           logger.info("Security values synchronized from JAR (all other config values preserved)");
@@ -154,16 +144,12 @@ public class SecurePluginLoader extends JavaPlugin {
         } else {
           logger.fine("Security values already up to date");
         }
-        
       }
     } catch (Exception e) {
       logger.log(Level.WARNING, "Error syncing security values from JAR", e);
     }
   }
-  
-  /**
-   * Helper para obtener un mapa anidado del config
-   */
+
   @SuppressWarnings("unchecked")
   private Map<String, Object> getNestedMap(Map<String, Object> config, String key) {
     Object value = config.get(key);
@@ -201,39 +187,35 @@ public class SecurePluginLoader extends JavaPlugin {
   private PublicKey loadTrustedPublicKey(String publicKeyBase64) throws Exception {
     logger.info("Attempting to load public key (length: " + publicKeyBase64.length() + ")");
 
-    // Detect Base64URL (contains - or _) vs standard Base64
     boolean isBase64Url = publicKeyBase64.contains("-") || publicKeyBase64.contains("_");
 
     byte[] keyBytes;
     if (isBase64Url) {
       logger.fine("Detected Base64URL format, adding padding if needed");
-      // Base64URL — add padding if missing
+
       String paddedKey = addBase64Padding(publicKeyBase64);
       keyBytes = Base64.getUrlDecoder().decode(paddedKey);
     } else {
       logger.fine("Using standard Base64 decoder");
-      // Standard Base64
+
       keyBytes = Base64.getDecoder().decode(publicKeyBase64);
     }
-    
+
     logger.info("Successfully decoded key bytes (length: " + keyBytes.length + ")");
-    
-    // Intentar primero con Ed25519, luego con EdDSA si falla
+
     KeyFactory factory;
     try {
       factory = KeyFactory.getInstance("Ed25519", "BC");
       logger.fine("Using Ed25519 KeyFactory from BouncyCastle");
     } catch (NoSuchAlgorithmException e) {
-      // Fall back to EdDSA which is more widely supported
       logger.info("Ed25519 not available, trying EdDSA");
       factory = KeyFactory.getInstance("EdDSA", "BC");
     }
-    
+
     return factory.generatePublic(new X509EncodedKeySpec(keyBytes));
   }
 
   private String addBase64Padding(String base64) {
-    // Add '=' padding if needed for Base64
     int mod = base64.length() % 4;
     if (mod == 0) {
       return base64;
@@ -247,7 +229,7 @@ public class SecurePluginLoader extends JavaPlugin {
     }
 
     logger.info("Verifying JAR signature for: " + pluginFile.getName());
-    
+
     try (JarFile jarFile = new JarFile(pluginFile)) {
       JarEntry signatureEntry = jarFile.getJarEntry("NEBENIAC.SIG");
       if (signatureEntry == null) {
@@ -275,7 +257,7 @@ public class SecurePluginLoader extends JavaPlugin {
         logger.severe("Public key format: " + trustedSignatureKey.getFormat());
         throw new SecurityException("Invalid digital signature for protected JAR: " + pluginFile.getName());
       }
-      
+
       logger.info("Signature verification SUCCESS for: " + pluginFile.getName());
     }
   }
@@ -285,7 +267,7 @@ public class SecurePluginLoader extends JavaPlugin {
     String version = getServer().getVersion();
     String software = getServer().getName();
     BackendService.ServerInfo info = new BackendService.ServerInfo();
-    info.setServerName(getServer().getServerName());
+    info.setServerName(getServer().getMotd());
     info.setServerPort(port);
     info.setMinecraftVersion(version);
     info.setServerSoftware(software);
@@ -299,28 +281,6 @@ public class SecurePluginLoader extends JavaPlugin {
     backendService = new BackendService(serverUrl, logger);
 
     logger.info("Backend service initialized: " + serverUrl);
-  }
-
-  private void initializeCryptoProvider() throws Exception {
-    logger.info("Initializing crypto provider...");
-
-    CryptoProviderFactory factory = CryptoProviderFactory.getInstance(logger);
-    String cryptoType = getConfig().getString("crypto.type", "AES");
-    cryptoProvider = factory.createProvider(cryptoType);
-
-    logger.info("Crypto provider initialized: " + cryptoProvider.getAlgorithmName());
-  }
-
-  private void initializePluginManager() {
-    logger.info("Initializing secure plugin manager...");
-
-    pluginManager = new SecurePluginManager(
-        cryptoProvider,
-        getConfig().getString("license.key"),
-        logger,
-        this);
-
-    logger.info("Secure plugin manager initialized");
   }
 
   private void loadSecurePlugins() {
@@ -361,13 +321,12 @@ public class SecurePluginLoader extends JavaPlugin {
   }
 
   public String getServerUrl() {
-    return getConfig().getString("server-url", "http://localhost:8080");
+    return getConfig().getString("license.server-url", getConfig().getString("server-url", "http://localhost:8080"));
   }
 
   public String getLicenseKey() {
     return getConfig().getString("license.key");
   }
-
 
   private String generateHardwareFingerprint() {
     if (hardwareFingerprint == null) {
@@ -439,27 +398,22 @@ public class SecurePluginLoader extends JavaPlugin {
         hardwareFingerprintValue,
         sessionToken);
 
-    try {
-      if (!protectionInfo.isAvailable()) {
-        throw new SecurityException(
-            "Could not retrieve protection info from backend for: " + pluginFile.getName());
-      }
-
-      String originalMainClass = protectionInfo.getOriginalMainClass();
-      logger.info("Original main class: " + originalMainClass);
-
-      try (SecurePluginClassLoader classLoader = new SecurePluginClassLoader(
-          this,
-          getLicenseKey(),
-          cryptoProvider,
-          pluginFile,
-          protectionInfo)) {
-        classLoader.loadPlugin(originalMainClass);
-      }
-
-      logger.info("Protected plugin loaded successfully: " + pluginFile.getName());
-    } finally {
-      backendService.clearSessionKey(sessionToken);
+    if (!protectionInfo.isAvailable()) {
+      throw new SecurityException(
+          "Could not retrieve protection info from backend for: " + pluginFile.getName());
     }
+
+    String originalMainClass = protectionInfo.getOriginalMainClass();
+    logger.info("Original main class: " + originalMainClass);
+
+    SecurePluginClassLoader classLoader = new SecurePluginClassLoader(this, pluginFile, protectionInfo);
+    try {
+      loadedPlugins.put(classLoader.loadPlugin(originalMainClass), classLoader);
+    } catch (Exception e) {
+      classLoader.close();
+      throw e;
+    }
+
+    logger.info("Protected plugin loaded successfully: " + pluginFile.getName());
   }
 }

@@ -7,8 +7,7 @@ import {Input} from '@/components/ui/input.jsx'
 import {Label} from '@/components/ui/label.jsx'
 import {Alert, AlertDescription} from '@/components/ui/alert.jsx'
 import {ERR_SERVER_CONNECTION} from '@/lib/utils.js'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 export default function CompleteRegistration() {
     const [searchParams] = useSearchParams()
@@ -48,7 +47,6 @@ export default function CompleteRegistration() {
         e.preventDefault()
         setLoading(true)
         setError('')
-
 
         if (!formData.firstName || !formData.lastName || !formData.password) {
             setError('All fields are required')

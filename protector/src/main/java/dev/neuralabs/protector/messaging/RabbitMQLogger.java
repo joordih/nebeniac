@@ -11,7 +11,6 @@ import java.util.concurrent.TimeoutException;
 
 @Slf4j
 public class RabbitMQLogger implements AutoCloseable {
-
   private static final String EXCHANGE_NAME = "nebeniac.protector.logs";
   private static final String ROUTING_KEY_PREFIX = "protector.session.";
 
@@ -49,7 +48,6 @@ public class RabbitMQLogger implements AutoCloseable {
 
       log.info("RabbitMQ connection established for session: {}", sessionId);
       return true;
-
     } catch (Exception e) {
       log.warn("Failed to initialize RabbitMQ connection (logs will be local only): {}", e.getMessage());
       return false;
@@ -68,7 +66,6 @@ public class RabbitMQLogger implements AutoCloseable {
 
       String routingKey = ROUTING_KEY_PREFIX + sessionId;
       channel.basicPublish(EXCHANGE_NAME, routingKey, null, logMessage.getBytes(StandardCharsets.UTF_8));
-
     } catch (Exception e) {
       log.debug("Failed to send log to RabbitMQ: {}", e.getMessage());
       enabled = false;
@@ -99,35 +96,25 @@ public class RabbitMQLogger implements AutoCloseable {
     info(String.format("Starting encryption process for plugin: %s (license: %s)", pluginId, licenseKey));
   }
 
-  public void notifySuccess(String pluginId, String outputPath, String encryptionId, String encryptionKey) {
+  public void notifySuccess(String pluginId, String outputPath, String encryptionId) {
     success(String.format("Encryption completed successfully for plugin: %s", pluginId));
     sendProgress(100, "Encryption completed successfully");
-    sendCompletion(true, outputPath, "Encryption completed successfully", encryptionId, encryptionKey);
+    sendCompletion(true, outputPath, "Encryption completed successfully", encryptionId);
   }
 
   public void notifyError(String pluginId, String errorMessage) {
     error(String.format("Encryption failed for plugin: %s - %s", pluginId, errorMessage));
-    sendCompletion(false, null, errorMessage, null, null);
+    sendCompletion(false, null, errorMessage, null);
   }
 
-  private void sendCompletion(boolean success, String outputPath, String msg, String encryptionId, String encryptionKey) {
+  private void sendCompletion(boolean success, String outputPath, String msg, String encryptionId) {
     if (!enabled) {
       return;
     }
 
     try {
       String completionMessage;
-      if (encryptionId != null && encryptionKey != null) {
-        completionMessage = String.format(
-            "{\"type\":\"COMPLETION\",\"success\":%b,\"outputPath\":\"%s\",\"message\":\"%s\",\"encryptionId\":\"%s\",\"encryptionKey\":\"%s\",\"timestamp\":%d,\"sessionId\":\"%s\"}",
-            success,
-            outputPath != null ? escapeJson(outputPath) : "",
-            escapeJson(msg),
-            escapeJson(encryptionId),
-            escapeJson(encryptionKey),
-            System.currentTimeMillis(),
-            sessionId);
-      } else if (encryptionId != null) {
+      if (encryptionId != null) {
         completionMessage = String.format(
             "{\"type\":\"COMPLETION\",\"success\":%b,\"outputPath\":\"%s\",\"message\":\"%s\",\"encryptionId\":\"%s\",\"timestamp\":%d,\"sessionId\":\"%s\"}",
             success,

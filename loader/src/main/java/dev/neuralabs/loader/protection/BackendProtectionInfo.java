@@ -9,7 +9,6 @@ import java.util.logging.Logger;
 
 @Getter
 public class BackendProtectionInfo {
-
   private final Logger logger;
   private final BackendService backendService;
   private final String licenseKey;
@@ -29,16 +28,11 @@ public class BackendProtectionInfo {
   }
 
   public boolean loadProtectionInfo() {
-
     if (loaded && pluginMetadata != null) {
-
       return true;
-
     }
 
-    String issuedSessionToken = null;
     try {
-
       logger.info("Verifying license with backend...");
       BackendService.LicenseVerificationResult verificationResult = backendService.verifyLicense(
           licenseKey,
@@ -51,7 +45,7 @@ public class BackendProtectionInfo {
         throw new IllegalStateException("License verification failed or session token not provided");
       }
 
-      issuedSessionToken = verificationResult.getSessionToken();
+      String issuedSessionToken = verificationResult.getSessionToken();
       this.sessionToken = issuedSessionToken;
 
       logger.info("Requesting plugin metadata from backend with session token...");
@@ -61,41 +55,22 @@ public class BackendProtectionInfo {
       loaded = true;
 
       logger.info("Plugin metadata loaded successfully:");
-
       logger.info("  - Plugin ID: " + pluginMetadata.getPluginId());
-
       logger.info("  - Plugin Name: " + pluginMetadata.getPluginName());
-
       logger.info("  - Plugin Version: " + pluginMetadata.getPluginVersion());
-
       logger.info("  - Original Main Class: " + pluginMetadata.getOriginalMainClass());
-
       logger.info("  - Encryption Key: [REDACTED]");
-
       logger.info("  - Target Packages: "
-
           + (pluginMetadata.getTargetPackages() != null
               ? String.join(", ", pluginMetadata.getTargetPackages())
-
               : "null"));
 
       return true;
-
     } catch (Exception e) {
-
       logger.severe("Failed to load plugin metadata from backend: " + e.getMessage());
-
       loaded = false;
-
       pluginMetadata = null;
-
       return false;
-
-    } finally {
-
-      if (issuedSessionToken != null) {
-        backendService.clearSessionKey(issuedSessionToken);
-      }
     }
   }
 

@@ -51,8 +51,25 @@ import BlurredLicenseKey from "./BlurredLicenseKey.jsx";
 import EditLicenseDialog from "./EditLicenseDialog.jsx";
 import UserCombobox from "./UserCombobox.jsx";
 import ViewLicenseDialog from "./ViewLicenseDialog.jsx";
+import {API_BASE_URL} from "@/lib/config.js";
 
-const API_BASE_URL = "http://localhost:8080/api/v1";
+const DEFAULT_NEW_LICENSE = {
+  customerEmail: "",
+  customerName: "",
+  licenseType: "STANDARD",
+  maxActivations: 5,
+  features: ["BASIC_PROTECTION", "HEARTBEAT_VERIFICATION"],
+  notes: "",
+  pluginId: "",
+};
+
+const AVAILABLE_FEATURES = [
+  "BASIC_PROTECTION",
+  "HEARTBEAT_VERIFICATION",
+  "ADVANCED_ENCRYPTION",
+  "CUSTOM_BRANDING",
+  "PRIORITY_SUPPORT",
+];
 
 export default function LicenseManager() {
   const { getAuthHeaders } = useAuth();
@@ -69,24 +86,8 @@ export default function LicenseManager() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const [newLicense, setNewLicense] = useState({
-    customerEmail: "",
-    customerName: "",
-    licenseType: "STANDARD",
-    maxActivations: 5,
-    features: ["BASIC_PROTECTION", "HEARTBEAT_VERIFICATION"],
-    notes: "",
-    pluginId: "",
-  });
+  const [newLicense, setNewLicense] = useState(DEFAULT_NEW_LICENSE);
   const [selectedUser, setSelectedUser] = useState(null);
-
-  const availableFeatures = [
-    "BASIC_PROTECTION",
-    "HEARTBEAT_VERIFICATION",
-    "ADVANCED_ENCRYPTION",
-    "CUSTOM_BRANDING",
-    "PRIORITY_SUPPORT",
-  ];
 
   useEffect(() => {
     loadLicenses();
@@ -130,7 +131,9 @@ export default function LicenseManager() {
 
   const loadPlugins = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/plugins`);
+      const response = await fetch(`${API_BASE_URL}/plugins`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -157,11 +160,8 @@ export default function LicenseManager() {
         return;
       }
 
-      const licenseKey = `LIC-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
       const licenseData = {
         ...newLicense,
-        licenseKey,
         customerEmail: selectedUser.email,
         customerName:
           selectedUser.fullName ||
@@ -182,16 +182,8 @@ export default function LicenseManager() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        setSuccess(`License created successfully! License Key: ${licenseKey}`);
-        setNewLicense({
-          customerEmail: "",
-          customerName: "",
-          licenseType: "STANDARD",
-          maxActivations: 5,
-          features: ["BASIC_PROTECTION", "HEARTBEAT_VERIFICATION"],
-          notes: "",
-          pluginId: "",
-        });
+        setSuccess(`License created successfully! License Key: ${data.license.licenseKey}`);
+        setNewLicense(DEFAULT_NEW_LICENSE);
         setSelectedUser(null);
         setShowCreateDialog(false);
         loadLicenses();
@@ -442,7 +434,7 @@ export default function LicenseManager() {
               <div className="space-y-2">
                 <Label>Features</Label>
                 <div className="space-y-2">
-                  {availableFeatures.map((feature) => (
+                  {AVAILABLE_FEATURES.map((feature) => (
                     <div key={feature} className="flex items-center space-x-2">
                       <Checkbox
                         id={feature}

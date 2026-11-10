@@ -7,6 +7,8 @@ import com.github.dockerjava.core.DefaultDockerClientConfig;
 import com.github.dockerjava.core.DockerClientBuilder;
 import dev.neuralabs.auth.messaging.RabbitMQLogListener;
 import io.netty.handler.timeout.TimeoutException;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
@@ -15,6 +17,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -24,7 +29,7 @@ import java.util.function.Consumer;
 
 @Slf4j
 public class DockerEncryptionService {
-
+  private static final SecureRandom CONTENT_KEY_RANDOM = new SecureRandom();
   private final DockerClient dockerClient;
   private final String workspaceDir;
   private final RabbitMQLogListener rabbitMQListener;
@@ -84,7 +89,6 @@ public class DockerEncryptionService {
       throw new RuntimeException("Failed to initialize RabbitMQ listener", e);
     }
 
-    // Initialize signature services
     try {
       this.signatureService = new Ed25519SignatureService();
       this.jarSignatureService = new JarSignatureService(signatureService);
@@ -104,7 +108,6 @@ public class DockerEncryptionService {
       log.info("Docker encryption service initialized with workspace: {}", workspaceDir);
 
       testDockerConnection();
-
     } catch (IOException e) {
       log.error("Failed to create workspace directory", e);
       throw new RuntimeException("Failed to initialize Docker encryption service", e);
@@ -220,13 +223,13 @@ public class DockerEncryptionService {
       String licenseKey,
       List<String> targetPackages,
       String inputJarPath,
-      String perLicenseSalt,
       Consumer<String> logCallback,
       BiConsumer<Integer, String> progressCallback) {
-
     return CompletableFuture.supplyAsync(() -> {
       String sessionId = UUID.randomUUID().toString();
       String sessionDir = workspaceDir + sessionId + "/";
+      String containerOutputPath = "/app/temp/" + sessionId + "/plugin-encrypted.jar";
+      String contentKey = generateContentKey();
 
       CompletableFuture<RabbitMQLogListener.CompletionMessage> completionFuture = new CompletableFuture<>();
 
@@ -295,8 +298,9 @@ public class DockerEncryptionService {
 
         new Thread(() -> {
           try {
-            int exitCode = executeEncryptionInContainer(containerId, sessionId, licenseKey, pluginId, packagesStr,
-                perLicenseSalt, logCallback);
+            int exitCode = executeEncryptionInContainer(containerId, sessionId, contentKey, containerOutputPath,
+                licenseKey, pluginId, packagesStr,
+                logCallback);
             logCallback.accept("[INFO] Processing completed with exit code: " + exitCode);
           } catch (Exception ex) {
             logCallback.accept("[ERROR] Exception launching encryption in container: " + ex.getMessage());
@@ -321,11 +325,10 @@ public class DockerEncryptionService {
           return new EncryptionResult(false, null, completion.getMessage(), completion.getEncryptionId(), null, completion.getSignature());
         }
 
-       
         logCallback.accept("[INFO] RabbitMQ confirmation received, waiting for file to be fully written...");
         Thread.sleep(2000);
 
-        copyFileFromContainer(containerId, "/app/output/plugin-encrypted.jar",
+        copyFileFromContainer(containerId, containerOutputPath,
             sessionDir + "output/plugin-encrypted.jar", logCallback);
 
         Path encryptedJarPath = Paths.get(sessionDir + "output/plugin-encrypted.jar");
@@ -344,12 +347,10 @@ public class DockerEncryptionService {
 
         logCallback.accept("[SUCCESS] Real encrypted JAR successfully extracted (" + jarSize + " bytes)");
 
-        // Generate unique hardware fingerprint salt for this encrypted plugin
         logCallback.accept("[INFO] Generating unique hardware fingerprint salt...");
         String hardwareFingerprintSalt = ConfigYmlUpdater.generateHardwareFingerprintSalt();
         logCallback.accept("[SUCCESS] Salt generated: " + hardwareFingerprintSalt.substring(0, Math.min(16, hardwareFingerprintSalt.length())) + "...");
 
-        // Update config.yml inside the JAR with signature key and salt
         logCallback.accept("[INFO] Updating config.yml with signature key and salt...");
         String publicKeyBase64Url = signatureService.getPublicKeyBase64Url();
         try {
@@ -360,12 +361,11 @@ public class DockerEncryptionService {
         } catch (Exception e) {
           logCallback.accept("[ERROR] Failed to update config.yml: " + e.getMessage());
           log.error("Failed to update config.yml in JAR", e);
-          return new EncryptionResult(false, null, 
-              "Encryption succeeded but config.yml update failed: " + e.getMessage(), 
+          return new EncryptionResult(false, null,
+              "Encryption succeeded but config.yml update failed: " + e.getMessage(),
               completion.getEncryptionId(), null, null);
         }
 
-        // Sign the encrypted JAR with Ed25519 (after config.yml update)
         logCallback.accept("[INFO] Signing encrypted JAR with Ed25519...");
         String jarSignature;
         try {
@@ -375,15 +375,15 @@ public class DockerEncryptionService {
         } catch (Exception e) {
           logCallback.accept("[ERROR] Failed to sign JAR: " + e.getMessage());
           log.error("Failed to sign encrypted JAR", e);
-          return new EncryptionResult(false, null, 
-              "Encryption succeeded but JAR signing failed: " + e.getMessage(), 
+          return new EncryptionResult(false, null,
+              "Encryption succeeded but JAR signing failed: " + e.getMessage(),
               completion.getEncryptionId(), null, null);
         }
 
         String permanentDir = "/tmp/nebeniac-encryption/" + pluginId + "_" + licenseKey + "/output/";
         Files.createDirectories(Paths.get(permanentDir));
         Path permanentPath = Paths.get(permanentDir + "plugin-encrypted.jar");
-        Files.copy(encryptedJarPath, permanentPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        Files.copy(encryptedJarPath, permanentPath, StandardCopyOption.REPLACE_EXISTING);
         logCallback.accept("[INFO] Signed encrypted JAR saved to: " + permanentPath);
 
         String completionMessage = completion.getMessage() != null && !completion.getMessage().isBlank()
@@ -391,12 +391,10 @@ public class DockerEncryptionService {
             : "Encryption and signing completed successfully";
         logCallback.accept("[SUCCESS] Encryption and signing process confirmed complete");
 
-        String encryptionKey = completion.getEncryptionKey();
+        String encryptionKey = contentKey;
 
-        // Use the JAR signature we just created instead of the one from completion
         return new EncryptionResult(true, permanentPath.toString(), completionMessage,
             completion.getEncryptionId(), encryptionKey, jarSignature);
-
       } catch (Exception e) {
         log.error("Error during encryption process", e);
         logCallback.accept("[ERROR] Exception during encryption: " + e.getMessage());
@@ -428,6 +426,8 @@ public class DockerEncryptionService {
     }
   }
 
+  @Getter
+  @AllArgsConstructor
   public static class EncryptionResult {
     private final boolean success;
     private final String encryptedJarPath;
@@ -435,39 +435,6 @@ public class DockerEncryptionService {
     private final String encryptionId;
     private final String encryptionKey;
     private final String signature;
-
-    public EncryptionResult(boolean success, String encryptedJarPath, String message, String encryptionId, String encryptionKey, String signature) {
-      this.success = success;
-      this.encryptedJarPath = encryptedJarPath;
-      this.message = message;
-      this.encryptionId = encryptionId;
-      this.encryptionKey = encryptionKey;
-      this.signature = signature;
-    }
-
-    public boolean isSuccess() {
-      return success;
-    }
-
-    public String getEncryptedJarPath() {
-      return encryptedJarPath;
-    }
-
-    public String getMessage() {
-      return message;
-    }
-
-    public String getEncryptionId() {
-      return encryptionId;
-    }
-
-    public String getEncryptionKey() {
-      return encryptionKey;
-    }
-
-    public String getSignature() {
-      return signature;
-    }
   }
 
   private void copyFileToContainer(String containerId, String hostPath, String containerPath,
@@ -546,8 +513,9 @@ public class DockerEncryptionService {
     }
   }
 
-  private int executeEncryptionInContainer(String containerId, String sessionId, String licenseKey, String pluginId,
-                                           String targetPackages, String perLicenseSalt, Consumer<String> logCallback) {
+  private int executeEncryptionInContainer(String containerId, String sessionId, String contentKey,
+                                           String outputPath, String licenseKey, String pluginId,
+                                           String targetPackages, Consumer<String> logCallback) {
     try {
       String[] findCommand = {"find", "/app", "-name", "NebeniacProtector*.jar", "-type", "f"};
       var findExecResponse = dockerClient.execCreateCmd(containerId)
@@ -561,6 +529,10 @@ public class DockerEncryptionService {
           .awaitCompletion();
 
       String[] possibleJarPaths = {
+          "/app/shared/protector.jar",
+          "/app/target/protector-1.0-SNAPSHOT.jar",
+          "/app/protector-1.0-SNAPSHOT.jar",
+          "/app/protector.jar",
           "/app/shared/NebeniacProtector.jar",
           "/app/NebeniacProtector-1.0-SNAPSHOT.jar",
           "/app/target/NebeniacProtector-1.0-SNAPSHOT.jar",
@@ -597,16 +569,12 @@ public class DockerEncryptionService {
         return -1;
       }
 
-     
       String inputPath = "/app/temp/" + sessionId + "/plugin.jar";
-      String outputPath = "/app/output/plugin-encrypted.jar";
-
-      String safeSalt = perLicenseSalt != null ? perLicenseSalt : "";
 
       String[] command = {
           "java", "-jar", jarPath,
           inputPath, outputPath,
-          licenseKey, pluginId, targetPackages != null ? targetPackages : "", safeSalt, sessionId
+          licenseKey, pluginId, targetPackages != null ? targetPackages : "", sessionId
       };
 
       logCallback.accept("[INFO] Executing encryption command in container...");
@@ -615,6 +583,7 @@ public class DockerEncryptionService {
           .withAttachStdout(true)
           .withAttachStderr(true)
           .withCmd(command)
+          .withEnv(List.of("NEBENIAC_CONTENT_KEY=" + contentKey))
           .exec();
 
       dockerClient.execStartCmd(execCreateResponse.getId())
@@ -628,10 +597,19 @@ public class DockerEncryptionService {
 
       logCallback.accept("[INFO] Encryption command completed with exit code: " + exitCode);
       return exitCode;
-
     } catch (Exception e) {
       logCallback.accept("[ERROR] Failed to execute encryption in container: " + e.getMessage());
       return -1;
+    }
+  }
+
+  private static String generateContentKey() {
+    byte[] key = new byte[32];
+    CONTENT_KEY_RANDOM.nextBytes(key);
+    try {
+      return Base64.getEncoder().encodeToString(key);
+    } finally {
+      Arrays.fill(key, (byte) 0);
     }
   }
 

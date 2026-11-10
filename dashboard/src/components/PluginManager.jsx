@@ -33,8 +33,7 @@ import { Label } from "@/components/ui/label.jsx";
 import { Textarea } from "@/components/ui/textarea.jsx";
 import { Alert, AlertDescription } from "@/components/ui/alert.jsx";
 import { useAuth } from "@/contexts/AuthContext.jsx";
-
-const API_BASE_URL = "http://localhost:8080/api/v1";
+import { API_BASE_URL } from "@/lib/config.js";
 
 export default function PluginManager() {
   const { getAuthHeaders } = useAuth();
@@ -68,7 +67,9 @@ export default function PluginManager() {
   const loadPlugins = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/plugins`);
+      const response = await fetch(`${API_BASE_URL}/plugins`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -242,7 +243,6 @@ export default function PluginManager() {
 
   return (
     <div className="space-y-6">
-      {}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">
@@ -374,7 +374,6 @@ export default function PluginManager() {
         </Dialog>
       </div>
 
-      {}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -386,7 +385,6 @@ export default function PluginManager() {
         </Alert>
       )}
 
-      {}
       <div className="flex items-center space-x-2">
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input
@@ -397,7 +395,6 @@ export default function PluginManager() {
         />
       </div>
 
-      {}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center">
@@ -500,7 +497,6 @@ export default function PluginManager() {
         </CardContent>
       </Card>
 
-      {}
       <EditPluginDialog
         plugin={editingPlugin}
         isOpen={showEditDialog}

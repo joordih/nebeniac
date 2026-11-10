@@ -1,7 +1,8 @@
 package dev.neuralabs.auth.controller;
 
+import static dev.neuralabs.auth.controller.ControllerSupport.error;
+
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import dev.neuralabs.auth.config.AuthConfig;
 import dev.neuralabs.auth.database.DatabaseConnection;
 import dev.neuralabs.auth.database.DatabaseInterface;
@@ -10,8 +11,11 @@ import dev.neuralabs.auth.model.User;
 import dev.neuralabs.auth.model.UserSession;
 import dev.neuralabs.auth.security.RateLimiter;
 import dev.neuralabs.auth.service.EmailService;
+import dev.neuralabs.auth.util.GsonUtil;
 import dev.neuralabs.auth.util.JWTUtil;
 import dev.neuralabs.auth.util.PasswordUtil;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import spark.Request;
 import spark.Response;
@@ -23,7 +27,6 @@ import java.util.Map;
 
 @Slf4j
 public class AuthController {
-
   private final DatabaseInterface database;
   private final Gson gson;
   private final EmailService emailService;
@@ -33,17 +36,13 @@ public class AuthController {
   public AuthController() {
     this.database = DatabaseConnection.getInstance().getDatabase();
     this.config = AuthConfig.getInstance();
-    this.gson = new GsonBuilder()
-        .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-        .create();
+    this.gson = GsonUtil.build();
 
     this.emailService = new EmailService(config);
     this.loginRateLimiter = RateLimiter.Factory.forAuthentication();
   }
 
   public String login(Request request, Response response) {
-    response.type("application/json");
-
     try {
       if (!loginRateLimiter.tryConsume(request.ip())) {
         log.warn("Login rate limit exceeded for IP: {}", request.ip());
@@ -66,6 +65,11 @@ public class AuthController {
       if (!PasswordUtil.verifyPassword(loginRequest.getPassword(), user.getPasswordHash())) {
         logAuditEvent("LOGIN_FAILED", user.getId(), request.ip(), false, "Incorrect password");
         return error(response, 401, "Invalid credentials");
+      }
+
+      if (PasswordUtil.needsRehash(user.getPasswordHash())) {
+        user.setPasswordHash(PasswordUtil.hashPassword(loginRequest.getPassword()));
+        database.saveUser(user);
       }
 
       if (!user.canLogin()) {
@@ -100,7 +104,6 @@ public class AuthController {
       responseData.put("expiresIn", config.getSessionTimeoutMillis() / 1000);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error during login", e);
       return error(response, 500, "Internal server error");
@@ -108,8 +111,6 @@ public class AuthController {
   }
 
   public String logout(Request request, Response response) {
-    response.type("application/json");
-
     try {
       String authHeader = request.headers("Authorization");
       if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -131,7 +132,6 @@ public class AuthController {
       logAuditEvent("LOGOUT", claims.getUserId(), request.ip(), true, "Logout successful");
 
       return gson.toJson(Map.of("success", true, "message", "Logout successful"));
-
     } catch (Exception e) {
       log.error("Error during logout", e);
       return error(response, 500, "Internal server error");
@@ -139,8 +139,6 @@ public class AuthController {
   }
 
   public String completeRegistration(Request request, Response response) {
-    response.type("application/json");
-
     try {
       CompleteRegistrationRequest regRequest = gson.fromJson(request.body(), CompleteRegistrationRequest.class);
 
@@ -159,6 +157,11 @@ public class AuthController {
         return error(response, 400, "User has already completed registration");
       }
 
+      String passwordError = PasswordUtil.validatePassword(regRequest.getPassword(), config);
+      if (passwordError != null) {
+        return error(response, 400, passwordError);
+      }
+
       user.setFirstName(regRequest.getFirstName());
       user.setLastName(regRequest.getLastName());
       user.setUsername(regRequest.getUsername());
@@ -174,7 +177,6 @@ public class AuthController {
           "Registration completed successfully");
 
       return gson.toJson(Map.of("success", true, "message", "Registration completed successfully"));
-
     } catch (Exception e) {
       log.error("Error completing registration", e);
       return error(response, 500, "Internal server error");
@@ -182,8 +184,6 @@ public class AuthController {
   }
 
   public String requestPasswordReset(Request request, Response response) {
-    response.type("application/json");
-
     try {
       PasswordResetRequest resetRequest = gson.fromJson(request.body(), PasswordResetRequest.class);
 
@@ -193,7 +193,6 @@ public class AuthController {
 
       User user = database.findUserByEmail(resetRequest.getEmail());
       if (user == null) {
-
         return gson.toJson(Map.of("success", true, "message",
             "If the email exists, you will receive instructions to reset your password"));
       }
@@ -211,7 +210,6 @@ public class AuthController {
 
       return gson.toJson(Map.of("success", true, "message",
           "If the email exists, you will receive instructions to reset your password"));
-
     } catch (Exception e) {
       log.error("Error requesting password reset", e);
       return error(response, 500, "Internal server error");
@@ -219,8 +217,6 @@ public class AuthController {
   }
 
   public String resetPassword(Request request, Response response) {
-    response.type("application/json");
-
     try {
       ResetPasswordRequest resetRequest = gson.fromJson(request.body(), ResetPasswordRequest.class);
 
@@ -238,6 +234,11 @@ public class AuthController {
         return error(response, 400, "Reset token expired");
       }
 
+      String passwordError = PasswordUtil.validatePassword(resetRequest.getNewPassword(), config);
+      if (passwordError != null) {
+        return error(response, 400, passwordError);
+      }
+
       user.setPasswordHash(PasswordUtil.hashPassword(resetRequest.getNewPassword()));
       user.setPasswordResetToken(null);
       user.setPasswordResetExpires(null);
@@ -250,7 +251,6 @@ public class AuthController {
       logAuditEvent("PASSWORD_RESET", user.getId(), request.ip(), true, "Password reset successfully");
 
       return gson.toJson(Map.of("success", true, "message", "Password reset successfully"));
-
     } catch (Exception e) {
       log.error("Error resetting password", e);
       return error(response, 500, "Internal server error");
@@ -258,8 +258,6 @@ public class AuthController {
   }
 
   public String verifyToken(Request request, Response response) {
-    response.type("application/json");
-
     try {
       String authHeader = request.headers("Authorization");
 
@@ -278,7 +276,6 @@ public class AuthController {
       UserSession session = database.findUserSessionByToken(token);
 
       if (session == null || !session.isValid()) {
-
         User user = database.findUserById(claims.getUserId());
         if (user == null || !user.canLogin()) {
           return error(response, 401, "Invalid user");
@@ -307,7 +304,6 @@ public class AuthController {
       responseData.put("valid", true);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error verifying token", e);
       return error(response, 500, "Internal server error");
@@ -348,110 +344,33 @@ public class AuthController {
     }
   }
 
-  private String error(Response response, int status, String message) {
-    response.status(status);
-    return gson.toJson(Map.of("success", false, "error", message));
-  }
-
+  @Getter
+  @Setter
   public static class LoginRequest {
     private String email;
     private String password;
-
-    public String getEmail() {
-      return email;
-    }
-
-    public void setEmail(String email) {
-      this.email = email;
-    }
-
-    public String getPassword() {
-      return password;
-    }
-
-    public void setPassword(String password) {
-      this.password = password;
-    }
   }
 
+  @Getter
+  @Setter
   public static class CompleteRegistrationRequest {
     private String token;
     private String firstName;
     private String lastName;
     private String username;
     private String password;
-
-    public String getToken() {
-      return token;
-    }
-
-    public void setToken(String token) {
-      this.token = token;
-    }
-
-    public String getFirstName() {
-      return firstName;
-    }
-
-    public void setFirstName(String firstName) {
-      this.firstName = firstName;
-    }
-
-    public String getLastName() {
-      return lastName;
-    }
-
-    public void setLastName(String lastName) {
-      this.lastName = lastName;
-    }
-
-    public String getUsername() {
-      return username;
-    }
-
-    public void setUsername(String username) {
-      this.username = username;
-    }
-
-    public String getPassword() {
-      return password;
-    }
-
-    public void setPassword(String password) {
-      this.password = password;
-    }
   }
 
+  @Getter
+  @Setter
   public static class PasswordResetRequest {
     private String email;
-
-    public String getEmail() {
-      return email;
-    }
-
-    public void setEmail(String email) {
-      this.email = email;
-    }
   }
 
+  @Getter
+  @Setter
   public static class ResetPasswordRequest {
     private String token;
     private String newPassword;
-
-    public String getToken() {
-      return token;
-    }
-
-    public void setToken(String token) {
-      this.token = token;
-    }
-
-    public String getNewPassword() {
-      return newPassword;
-    }
-
-    public void setNewPassword(String newPassword) {
-      this.newPassword = newPassword;
-    }
   }
 }

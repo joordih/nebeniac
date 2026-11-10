@@ -11,37 +11,40 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class DecryptedPayload {
-
-        @JsonProperty("data")
+    @JsonProperty("data")
     private String data;
 
-        @JsonProperty("nonce")
+    @JsonProperty("nonce")
     private String nonce;
 
-        @JsonProperty("timestamp")
+    @JsonProperty("timestamp")
     private Long timestamp;
 
-        @JsonProperty("senderId")
+    @JsonProperty("senderId")
     private String senderId;
 
-        public boolean isValid() {
+    @JsonProperty("responseKey")
+    private String responseKey;
+
+    public boolean isValid() {
         return data != null && !data.isEmpty() &&
                nonce != null && !nonce.isEmpty() &&
+               responseKey != null && !responseKey.isEmpty() &&
                timestamp != null && timestamp > 0;
     }
 
-        public long getAge() {
+    public long getAge() {
         if (timestamp == null) {
             return Long.MAX_VALUE;
         }
         return System.currentTimeMillis() - timestamp;
     }
 
-        public boolean isExpired(long maxAgeMs) {
+    public boolean isExpired(long maxAgeMs) {
         return getAge() > maxAgeMs;
     }
 
-        public boolean isTimestampValid(long maxDiffMs) {
+    public boolean isTimestampValid(long maxDiffMs) {
         if (timestamp == null) {
             return false;
         }

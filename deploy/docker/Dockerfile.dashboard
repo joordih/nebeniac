@@ -9,8 +9,7 @@ RUN npm install -g pnpm
 
 COPY dashboard/pnpm-lock.yaml* ./
 
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --no-strict-peer-dependencies
+RUN pnpm install --no-strict-peer-dependencies
 
 COPY dashboard/src ./src
 COPY dashboard/public ./public

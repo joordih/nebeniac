@@ -12,7 +12,6 @@ import org.mongojack.ObjectId;
 import java.util.Date;
 import java.util.Map;
 
-
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

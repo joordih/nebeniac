@@ -6,8 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
+import java.io.File;
 import java.io.IOException;
-import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,46 +15,37 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.Signature;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 
 public class JarWriter {
   private static final Logger logger = LoggerFactory.getLogger(JarWriter.class);
   private static final String SIGNATURE_ENTRY = "NEBENIAC.SIG";
-  private static final String PROTECTION_PROPERTIES = "nebeniac-protection.properties";
 
   private final Path outputJarPath;
-  private final String originalMainClass;
   private final Map<String, EncryptedData> encryptedClassEntries;
   private final Map<String, byte[]> resourceEntries;
   private final Map<String, Object> pluginYmlContent;
-  private final String encryptionKeyBase64;
   private final String encryptionId;
   private final PrivateKey signingKey;
 
   public JarWriter(
       Path outputJarPath,
-      String originalMainClass,
       Map<String, EncryptedData> encryptedClassEntries,
       Map<String, byte[]> resourceEntries,
       Map<String, Object> pluginYmlContent,
-      String encryptionKeyBase64,
       String encryptionId,
       PrivateKey signingKey) {
     this.outputJarPath = outputJarPath;
-    this.originalMainClass = originalMainClass;
     this.encryptedClassEntries = encryptedClassEntries;
     this.resourceEntries = resourceEntries;
     this.pluginYmlContent = pluginYmlContent;
-    this.encryptionKeyBase64 = encryptionKeyBase64;
     this.encryptionId = encryptionId;
     this.signingKey = signingKey;
   }
@@ -68,7 +59,6 @@ public class JarWriter {
       writeEncryptedClasses(jos, digest);
       writeResources(jos);
       writeModifiedPluginYml(jos, digest);
-      writeProtectionProperties(jos, digest);
       injectDummyPlugin(jos);
 
       String signatureBase64 = writeSignature(jos, digest);
@@ -116,7 +106,6 @@ public class JarWriter {
     logger.info("Modificando plugin.yml para usar DummyPlugin.");
     Map<String, Object> modifiedPluginYml = new HashMap<>(pluginYmlContent);
     modifiedPluginYml.put("main", "dev.neuralabs.plugin.DummyPlugin");
-    modifiedPluginYml.put("original-main", originalMainClass);
     modifiedPluginYml.put("encryption-id", encryptionId);
     modifiedPluginYml.put("encrypted", true);
 
@@ -130,23 +119,6 @@ public class JarWriter {
     jos.write(bytes);
     jos.closeEntry();
     updateDigest(digest, "plugin.yml", bytes);
-  }
-
-  private void writeProtectionProperties(JarOutputStream jos, MessageDigest digest) throws IOException {
-    Properties props = new Properties();
-    props.setProperty("encryption.key", encryptionKeyBase64);
-    props.setProperty("original.main.class", originalMainClass);
-    props.setProperty("encryption.id", encryptionId);
-    props.setProperty("generated.at", Long.toString(System.currentTimeMillis()));
-
-    try (StringWriter writer = new StringWriter()) {
-      props.store(writer, "Nebeniac protection metadata");
-      byte[] bytes = writer.toString().getBytes(StandardCharsets.UTF_8);
-      jos.putNextEntry(new ZipEntry(PROTECTION_PROPERTIES));
-      jos.write(bytes);
-      jos.closeEntry();
-      updateDigest(digest, PROTECTION_PROPERTIES, bytes);
-    }
   }
 
   private String writeSignature(JarOutputStream jos, MessageDigest digest)
@@ -174,34 +146,12 @@ public class JarWriter {
     digest.update(data);
   }
 
-  public PluginMetadata getPluginMetadata() {
-    return new PluginMetadata(encryptionKeyBase64, originalMainClass);
-  }
-
-  public static class PluginMetadata {
-    private final String encryptionKey;
-    private final String originalMainClass;
-
-    public PluginMetadata(String encryptionKey, String originalMainClass) {
-      this.encryptionKey = encryptionKey;
-      this.originalMainClass = originalMainClass;
-    }
-
-    public String getEncryptionKey() {
-      return encryptionKey;
-    }
-
-    public String getOriginalMainClass() {
-      return originalMainClass;
-    }
-  }
-
   private void injectDummyPlugin(JarOutputStream jos) throws IOException {
     logger.info("Inyectando DummyPlugin compilado...");
 
     try {
       String classPath = "target/classes/dev/neuralabs/plugin/DummyPlugin.class";
-      java.io.File classFile = new java.io.File(classPath);
+      File classFile = new File(classPath);
 
       if (classFile.exists()) {
         byte[] classBytes = Files.readAllBytes(classFile.toPath());
@@ -215,7 +165,6 @@ public class JarWriter {
         logger.error("DummyPlugin.class not found at: " + classPath);
         logger.info("Make sure to build the project first with: mvn compile");
       }
-
     } catch (Exception e) {
       logger.error("Error inyectando DummyPlugin: " + e.getMessage());
     }

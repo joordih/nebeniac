@@ -15,7 +15,6 @@ import java.util.Date;
 
 @Slf4j
 public class EmailService {
-
   private static final String GMAIL_API_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
   private static final String OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
@@ -50,7 +49,6 @@ public class EmailService {
       String htmlBody = createInvitationEmailTemplate(userName, verificationToken);
 
       return sendEmail(toEmail, subject, htmlBody);
-
     } catch (Exception e) {
       log.error("Error sending invitation email to {}", toEmail, e);
       return false;
@@ -63,7 +61,6 @@ public class EmailService {
       String htmlBody = createPasswordResetEmailTemplate(userName, resetToken);
 
       return sendEmail(toEmail, subject, htmlBody);
-
     } catch (Exception e) {
       log.error("Error sending password reset email to {}", toEmail, e);
       return false;
@@ -76,7 +73,6 @@ public class EmailService {
       String htmlBody = createWelcomeAdminEmailTemplate(userName);
 
       return sendEmail(toEmail, subject, htmlBody);
-
     } catch (Exception e) {
       log.error("Error sending welcome email to administrator {}", toEmail, e);
       return false;
@@ -90,7 +86,6 @@ public class EmailService {
 
       log.info("Sending test email to: {}", toEmail);
       return sendEmail(toEmail, subject, htmlBody);
-
     } catch (Exception e) {
       log.error("Error sending test email to {}", toEmail, e);
       return false;
@@ -184,7 +179,6 @@ public class EmailService {
 
         return false;
       }
-
     } catch (Exception e) {
       log.error("Error sending email to {}", toEmail, e);
       return false;
@@ -192,13 +186,11 @@ public class EmailService {
   }
 
   private boolean ensureValidAccessToken() {
-
     if (accessToken != null && System.currentTimeMillis() < (tokenExpiresAt - 300000)) {
       return true;
     }
 
     try {
-
       String requestBody = "grant_type=refresh_token" +
           "&refresh_token=" + URLEncoder.encode(refreshToken, StandardCharsets.UTF_8) +
           "&client_id=" + URLEncoder.encode(clientId, StandardCharsets.UTF_8) +
@@ -217,7 +209,6 @@ public class EmailService {
       HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
       if (response.statusCode() == 200) {
-
         String responseBody = response.body();
         String accessTokenValue = extractJsonValue(responseBody, "access_token");
         String expiresInValue = extractJsonValue(responseBody, "expires_in");
@@ -232,7 +223,6 @@ public class EmailService {
 
       log.error("Error renovando access token. Status: {}, Body: {}", response.statusCode(), response.body());
       return false;
-
     } catch (Exception e) {
       log.error("Error renovando access token", e);
       return false;
@@ -240,7 +230,6 @@ public class EmailService {
   }
 
   private String extractJsonValue(String json, String key) {
-
     String searchKey = "\"" + key + "\"";
     int keyIndex = json.indexOf(searchKey);
     if (keyIndex == -1)

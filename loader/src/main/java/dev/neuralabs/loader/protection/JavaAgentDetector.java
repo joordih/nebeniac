@@ -7,19 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.logging.Logger;
 
-/**
- * Detects Java agents and instrumentation attempts.
- * SECURITY: While not foolproof, this raises the bar for attackers trying to
- * intercept class loading or dump decrypted bytecode.
- * 
- * Detection methods:
- * 1. Strong signals: VM arguments, environment flags and JDWP/debug hooks
- * 2. Medium signals: boot/module patching and permissive attach policies
- * 3. Weak signals: internal instrumentation implementations and known agent frameworks
- * 4. Aggregated scoring to stay robust across Java 8-21 with fewer false positives
- */
 public class JavaAgentDetector {
-
     private final Logger logger;
     private boolean detectionEnabled = true;
 
@@ -62,11 +50,6 @@ public class JavaAgentDetector {
         }
     }
 
-    /**
-     * Performs comprehensive agent detection.
-     * 
-     * @return Detection result with details
-     */
     public DetectionResult detect() {
         if (!detectionEnabled) {
             return new DetectionResult(false, "Detection disabled");
@@ -107,9 +90,6 @@ public class JavaAgentDetector {
         return result;
     }
 
-    /**
-     * Checks VM arguments for agent-related flags that indicate direct instrumentation.
-     */
     private int checkJavaAgentArgs(List<String> arguments, DetectionResult result) {
         for (String arg : arguments) {
             String lowerArg = arg.toLowerCase(Locale.ROOT);
@@ -123,9 +103,6 @@ public class JavaAgentDetector {
         return 0;
     }
 
-    /**
-     * Checks environment variables that can inject agents before the JVM starts.
-     */
     private int checkEnvAgentOptions(DetectionResult result) {
         String[] keys = { "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS" };
         for (String key : keys) {
@@ -148,9 +125,6 @@ public class JavaAgentDetector {
         return 0;
     }
 
-    /**
-     * Checks VM arguments and system properties for JDWP or debugging support.
-     */
     private int checkJDWP(List<String> arguments, DetectionResult result) {
         for (String arg : arguments) {
             String lowerArg = arg.toLowerCase(Locale.ROOT);
@@ -173,9 +147,6 @@ public class JavaAgentDetector {
         return 0;
     }
 
-    /**
-     * Detects if the Attach Listener thread has been started in this JVM.
-     */
     private boolean checkAttachThread(DetectionResult result) {
         try {
             for (Thread thread : Thread.getAllStackTraces().keySet()) {
@@ -195,9 +166,6 @@ public class JavaAgentDetector {
         return false;
     }
 
-    /**
-     * Looks for attach-related capabilities enabled via system properties.
-     */
     private int checkAttachCapabilities(DetectionResult result) {
         int hits = 0;
         try {
@@ -213,9 +181,6 @@ public class JavaAgentDetector {
         return hits;
     }
 
-    /**
-     * Detects boot or module patching flags that relax module boundaries or override core classes.
-     */
     private int checkPatchArgs(List<String> arguments, JavaProfile profile, DetectionResult result) {
         boolean bootPatched = false;
         boolean modulePatched = false;
@@ -246,9 +211,6 @@ public class JavaAgentDetector {
         return count;
     }
 
-    /**
-     * Checks for the presence of the internal Instrumentation implementation.
-     */
     private int checkInstrumentationImpl(DetectionResult result) {
         try {
             Class.forName("sun.instrument.InstrumentationImpl", false, ClassLoader.getSystemClassLoader());
@@ -263,9 +225,6 @@ public class JavaAgentDetector {
         }
     }
 
-    /**
-     * Looks for well-known agent framework classes.
-     */
     private int checkAgentFrameworkHints(DetectionResult result) {
         String[] hints = {
                 "net.bytebuddy.agent.ByteBuddyAgent",
@@ -284,7 +243,6 @@ public class JavaAgentDetector {
                 logger.fine("Agent framework hint detected: " + className);
                 hits++;
             } catch (ClassNotFoundException e) {
-                // Not found, continue checking
             } catch (LinkageError e) {
                 logger.fine("Error while loading " + className + ": " + e.getMessage());
             }
@@ -292,13 +250,8 @@ public class JavaAgentDetector {
         return hits;
     }
 
-    /**
-     * Attempts to disable Attach mechanism (if possible).
-     * Note: This may not work on all JVMs and requires specific permissions.
-     */
     public void attemptDisableAttach() {
         try {
-            // Try to set system property to disable attach
             System.setProperty("jdk.attach.allowAttachSelf", "false");
             logger.info("Attempted to disable self-attach");
         } catch (SecurityException e) {
@@ -306,17 +259,11 @@ public class JavaAgentDetector {
         }
     }
 
-    /**
-     * Enables or disables agent detection.
-     */
     public void setDetectionEnabled(boolean enabled) {
         this.detectionEnabled = enabled;
         logger.info("Agent detection " + (enabled ? "enabled" : "disabled"));
     }
 
-    /**
-     * Detection result class.
-     */
     public static class DetectionResult {
         private boolean detected;
         private String message;
@@ -356,13 +303,6 @@ public class JavaAgentDetector {
         }
     }
 
-    /**
-     * Recommended JVM arguments for production to enhance security:
-     * -XX:+DisableAttachMechanism
-     * -Djdk.attach.allowAttachSelf=false
-     * -XX:+UnlockDiagnosticVMOptions
-     * -XX:+ShowHiddenFrames (for debugging only)
-     */
     public static String getRecommendedJVMArgs() {
         return "-XX:+DisableAttachMechanism -Djdk.attach.allowAttachSelf=false";
     }

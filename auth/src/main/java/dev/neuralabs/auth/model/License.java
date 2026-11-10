@@ -19,7 +19,6 @@ import java.util.Map;
 @Builder
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class License {
-
   @Id
   @ObjectId
   @JsonProperty("_id")
@@ -38,7 +37,6 @@ public class License {
   private String pluginId;
 
   private String encryptionKey;
-  private String perLicenseSalt;
   private List<String> targetPackages;
   private Map<String, Object> encryptionMetadata;
 
@@ -48,9 +46,5 @@ public class License {
 
   public boolean canBeUsed() {
     return active && !isExpired();
-  }
-
-  public boolean hasFeature(String feature) {
-    return features != null && features.contains(feature);
   }
 }

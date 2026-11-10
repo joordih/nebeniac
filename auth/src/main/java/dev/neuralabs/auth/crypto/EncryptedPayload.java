@@ -11,35 +11,34 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class EncryptedPayload {
-
-        @JsonProperty("ciphertext")
+    @JsonProperty("ciphertext")
     private String ciphertext;
 
-        @JsonProperty("timestamp")
+    @JsonProperty("timestamp")
     private Long timestamp;
 
-        @JsonProperty("version")
+    @JsonProperty("version")
     private String version;
 
-        @JsonProperty("senderId")
+    @JsonProperty("senderId")
     private String senderId;
 
-        @JsonProperty("nonce")
+    @JsonProperty("nonce")
     private String nonce;
 
-        public boolean isValid() {
+    public boolean isValid() {
         return ciphertext != null && !ciphertext.isEmpty() &&
                timestamp != null && timestamp > 0;
     }
 
-        public long getAge() {
+    public long getAge() {
         if (timestamp == null) {
             return Long.MAX_VALUE;
         }
         return System.currentTimeMillis() - timestamp;
     }
 
-        public boolean isExpired(long maxAgeMs) {
+    public boolean isExpired(long maxAgeMs) {
         return getAge() > maxAgeMs;
     }
 }

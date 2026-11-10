@@ -18,14 +18,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
-
 @Slf4j
 public class LocalDatabase implements DatabaseInterface {
-
   private static LocalDatabase instance;
   private final Gson gson;
   private final Path dataDirectory;
-
 
   private final Map<String, License> licenses = new ConcurrentHashMap<>();
   private final Map<String, Plugin> plugins = new ConcurrentHashMap<>();
@@ -35,12 +32,10 @@ public class LocalDatabase implements DatabaseInterface {
   private final Map<String, User> users = new ConcurrentHashMap<>();
   private final Map<String, UserSession> userSessions = new ConcurrentHashMap<>();
 
-
   private final AtomicLong licenseIdCounter = new AtomicLong(1);
   private final AtomicLong pluginIdCounter = new AtomicLong(1);
   private final AtomicLong activationIdCounter = new AtomicLong(1);
   private final AtomicLong auditLogIdCounter = new AtomicLong(1);
-
 
   private static final String LICENSES_FILE = "licenses.json";
   private static final String PLUGINS_FILE = "plugins.json";
@@ -54,8 +49,10 @@ public class LocalDatabase implements DatabaseInterface {
   private LocalDatabase() {
     this.gson = GsonUtil.buildPretty();
 
-
-    this.dataDirectory = Paths.get(System.getProperty("user.home"), ".nebeniac", "data");
+    String configuredDir = System.getenv("NEBENIAC_DATA_DIR");
+    this.dataDirectory = configuredDir != null && !configuredDir.isBlank()
+        ? Paths.get(configuredDir.trim())
+        : Paths.get(System.getProperty("user.home"), ".nebeniac", "data");
     try {
       Files.createDirectories(dataDirectory);
     } catch (IOException e) {
@@ -84,6 +81,8 @@ public class LocalDatabase implements DatabaseInterface {
     loadMap(ACTIVATIONS_FILE, new TypeToken<Map<String, List<Activation>>>() {}.getType(), activations, "activations");
     loadMap(SESSIONS_FILE, new TypeToken<Map<String, Session>>() {}.getType(), sessions, "sessions");
     loadList(AUDIT_LOGS_FILE, new TypeToken<List<AuditLog>>() {}.getType(), auditLogs, "audit logs");
+    loadMap(USERS_FILE, new TypeToken<Map<String, User>>() {}.getType(), users, "users");
+    loadMap(USER_SESSIONS_FILE, new TypeToken<Map<String, UserSession>>() {}.getType(), userSessions, "user sessions");
     loadCounters();
   }
 
@@ -134,7 +133,6 @@ public class LocalDatabase implements DatabaseInterface {
 
   private void createDefaultLicenses() {
     if (licenses.isEmpty()) {
-
       createTestLicense("TEST-1234-5678-9012", "STANDARD", "test@example.com", "Test User");
       createTestLicense("TEST-PREMIUM-001", "PREMIUM", "premium@example.com", "Premium User");
       createTestLicense("DEV-LICENSE-001", "DEVELOPER", "dev@example.com", "Developer");
@@ -194,7 +192,14 @@ public class LocalDatabase implements DatabaseInterface {
     }
     activation.setUpdatedAt(Date.from(Instant.now()));
 
-    activations.computeIfAbsent(activation.getLicenseKey(), k -> new ArrayList<>()).add(activation);
+    List<Activation> licenseActivations =
+        activations.computeIfAbsent(activation.getLicenseKey(), k -> Collections.synchronizedList(new ArrayList<>()));
+    synchronized (licenseActivations) {
+      licenseActivations.removeIf(a -> a == activation
+          || (activation.getHardwareFingerprint() != null
+              && activation.getHardwareFingerprint().equals(a.getHardwareFingerprint())));
+      licenseActivations.add(activation);
+    }
     saveActivations();
   }
 
@@ -274,7 +279,6 @@ public class LocalDatabase implements DatabaseInterface {
   @Override
   public boolean isHealthy() {
     try {
-
       return Files.exists(dataDirectory) && Files.isWritable(dataDirectory);
     } catch (Exception e) {
       log.error("Health check failed", e);
@@ -311,8 +315,6 @@ public class LocalDatabase implements DatabaseInterface {
     savePlugins();
   }
 
-
-
   private void savePlugins() {
     saveToFile(PLUGINS_FILE, plugins);
   }
@@ -331,7 +333,6 @@ public class LocalDatabase implements DatabaseInterface {
     stats.put("totalUserSessions", userSessions.size());
     return stats;
   }
-
 
   @Override
   public void saveUser(User user) {
@@ -398,7 +399,6 @@ public class LocalDatabase implements DatabaseInterface {
     saveUsers();
     log.debug("User deleted: {}", userId);
   }
-
 
   @Override
   public void saveUserSession(UserSession session) {
@@ -470,7 +470,6 @@ public class LocalDatabase implements DatabaseInterface {
       log.info("Cleaned up {} expired user sessions", expiredSessions.size());
     }
   }
-
 
   private void saveUsers() {
     saveToFile(USERS_FILE, users);

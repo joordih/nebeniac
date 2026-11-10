@@ -18,8 +18,7 @@ import {Label} from '@/components/ui/label.jsx'
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/components/ui/select.jsx'
 import {Alert, AlertDescription} from '@/components/ui/alert.jsx'
 import {ERR_SERVER_CONNECTION} from '@/lib/utils.js'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 export default function UserManagement() {
     const {getAuthHeaders} = useAuth()
@@ -191,7 +190,6 @@ export default function UserManagement() {
 
     return (
         <div className="space-y-6">
-            {}
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">User Management</h2>
@@ -252,7 +250,6 @@ export default function UserManagement() {
                 </Dialog>
             </div>
 
-            {}
             {error && (
                 <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>
@@ -265,7 +262,6 @@ export default function UserManagement() {
                 </Alert>
             )}
 
-            {}
             <div className="flex items-center space-x-2">
                 <Input
                     placeholder="Search users..."
@@ -275,7 +271,6 @@ export default function UserManagement() {
                 />
             </div>
 
-            {}
             <Card>
                 <CardHeader>
                     <CardTitle>Users ({filteredUsers.length})</CardTitle>

@@ -7,8 +7,7 @@ import {Input} from '@/components/ui/input.jsx'
 import {Label} from '@/components/ui/label.jsx'
 import {Alert, AlertDescription} from '@/components/ui/alert.jsx'
 import {ERR_SERVER_CONNECTION} from '@/lib/utils.js'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 export default function InitialSetup() {
     const navigate = useNavigate()
@@ -26,7 +25,8 @@ export default function InitialSetup() {
         firstName: '',
         lastName: '',
         password: '',
-        confirmPassword: ''
+        confirmPassword: '',
+        setupToken: ''
     })
 
     useEffect(() => {
@@ -40,7 +40,6 @@ export default function InitialSetup() {
 
             if (data.success) {
                 setSetupStatus(data)
-
 
                 if (data.setupComplete) {
                     navigate('/login')
@@ -77,7 +76,6 @@ export default function InitialSetup() {
         setCreating(true)
         setError('')
 
-
         if (!formData.email || !formData.firstName || !formData.lastName || !formData.password) {
             setError('All fields marked with * are required')
             setCreating(false)
@@ -102,6 +100,7 @@ export default function InitialSetup() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-Setup-Token': formData.setupToken.trim(),
                 },
                 body: JSON.stringify({
                     email: formData.email,
@@ -139,6 +138,7 @@ export default function InitialSetup() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-Setup-Token': formData.setupToken.trim(),
                 }
             })
 
@@ -149,7 +149,7 @@ export default function InitialSetup() {
                 setError('')
 
                 navigator.clipboard.writeText(data.credentials.password).catch(() => {})
-                alert(`User created:\nEmail: ${data.credentials.email}\n\nPassword copied to clipboard. Please save it in a secure place.\n\nCHANGE PASSWORD IMMEDIATELY!`)
+                alert(`User created:\nEmail: ${data.credentials.email}\n\nPassword copied to clipboard. It is shown only once: save it in a secure place.`)
 
                 setTimeout(() => {
                     navigate('/login')
@@ -264,6 +264,24 @@ export default function InitialSetup() {
                                     placeholder="Smith"
                                     value={formData.lastName}
                                     onChange={handleChange}
+                                    required
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="setupToken">Setup Token *</Label>
+                            <div className="relative">
+                                <Shield className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/>
+                                <Input
+                                    id="setupToken"
+                                    name="setupToken"
+                                    type="password"
+                                    autoComplete="off"
+                                    placeholder="Contents of data/secrets/setup_token on the auth server"
+                                    value={formData.setupToken}
+                                    onChange={handleChange}
+                                    className="pl-10"
                                     required
                                 />
                             </div>
