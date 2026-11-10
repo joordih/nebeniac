@@ -1,21 +1,30 @@
 package dev.neuralabs.auth.controller;
 
+import static dev.neuralabs.auth.controller.ControllerSupport.bearerClaims;
+import static dev.neuralabs.auth.controller.ControllerSupport.error;
+import static dev.neuralabs.auth.controller.ControllerSupport.isEncryptedPayload;
+import static dev.neuralabs.auth.controller.ControllerSupport.maskLicenseKey;
+
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import dev.neuralabs.auth.crypto.E2EEDecryptionService;
+import dev.neuralabs.auth.crypto.DecryptedPayload;
 import dev.neuralabs.auth.crypto.E2EEDecryptionService.E2EEException;
-import dev.neuralabs.auth.crypto.E2EEResponseEncryption;
+import dev.neuralabs.auth.crypto.E2EEDecryptionService;
 import dev.neuralabs.auth.crypto.E2EEResponseEncryption.E2EEEncryptionException;
+import dev.neuralabs.auth.crypto.E2EEResponseEncryption;
 import dev.neuralabs.auth.crypto.KeyEncryptionService;
 import dev.neuralabs.auth.database.DatabaseConnection;
 import dev.neuralabs.auth.database.DatabaseInterface;
 import dev.neuralabs.auth.model.AuditLog;
 import dev.neuralabs.auth.model.License;
 import dev.neuralabs.auth.model.Plugin;
+import dev.neuralabs.auth.model.Session;
 import dev.neuralabs.auth.security.RateLimiter;
 import dev.neuralabs.auth.service.DockerEncryptionService;
+import dev.neuralabs.auth.util.GsonUtil;
 import dev.neuralabs.auth.util.JWTUtil;
 import dev.neuralabs.auth.websocket.EncryptionWebSocketHandler;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import spark.Request;
 import spark.Response;
@@ -27,14 +36,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.security.SecureRandom;
-import java.util.Base64;
 import java.time.Instant;
 import java.util.*;
 
 @Slf4j
 public class PluginController {
-
   private final DatabaseInterface database;
   private final Gson gson;
   private final DockerEncryptionService dockerService;
@@ -43,38 +49,21 @@ public class PluginController {
   private final E2EEDecryptionService e2eeService;
   private final E2EEResponseEncryption responseEncryption;
 
-  // SECURITY: Rate limiters for plugin operations
   private final RateLimiter metadataRateLimiter;
 
-  // SECURITY: Authorization filter for admin endpoints
-  private final dev.neuralabs.auth.security.AuthorizationFilter authFilter;
-
-  public PluginController() {
+  public PluginController(
+      KeyEncryptionService keyEncryptionService,
+      E2EEDecryptionService e2eeService,
+      E2EEResponseEncryption responseEncryption) {
     this.database = DatabaseConnection.getInstance().getDatabase();
-    this.gson = new GsonBuilder()
-        .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-        .create();
+    this.gson = GsonUtil.buildApi();
     this.dockerService = new DockerEncryptionService();
     this.webSocketHandler = new EncryptionWebSocketHandler(8081);
-    this.keyEncryptionService = new KeyEncryptionService();
+    this.keyEncryptionService = keyEncryptionService;
+    this.e2eeService = e2eeService;
+    this.responseEncryption = responseEncryption;
 
-    E2EEDecryptionService tempE2EE = null;
-    E2EEResponseEncryption tempResponseEncryption = null;
-    try {
-      tempE2EE = new E2EEDecryptionService();
-      tempResponseEncryption = new E2EEResponseEncryption(true);
-      log.info("E2EE services initialized for plugin controller endpoints");
-    } catch (Exception e) {
-      log.error("Failed to initialize E2EE services for PluginController: {}", e.getMessage());
-    }
-    this.e2eeService = tempE2EE;
-    this.responseEncryption = tempResponseEncryption;
-
-    // Initialize rate limiters
     this.metadataRateLimiter = RateLimiter.Factory.forMetadataRequests();
-
-    // Initialize authorization filter
-    this.authFilter = new dev.neuralabs.auth.security.AuthorizationFilter();
 
     new Thread(() -> {
       try {
@@ -87,16 +76,10 @@ public class PluginController {
   }
 
   public String registerPlugin(Request request, Response response) {
-    response.type("application/json");
-
-    // SECURITY: Require admin authentication for plugin registration
-    if (!authFilter.requireAdmin(request, response)) {
-      return response.body(); // AuthFilter already set the error response
-    }
-
     try {
       RegisterPluginRequest registerRequest;
       String jarFilePath = null;
+      Path pluginsDir = Paths.get("/app/plugins");
 
       String contentType = request.contentType();
       if (contentType != null && contentType.startsWith("multipart/form-data")) {
@@ -108,11 +91,13 @@ public class PluginController {
         }
 
         registerRequest = gson.fromJson(pluginDataJson, RegisterPluginRequest.class);
+        if (registerRequest == null || !isValidPluginId(registerRequest.getPluginId())) {
+          return error(response, 400, "Invalid plugin ID");
+        }
 
         try {
           Part jarFilePart = request.raw().getPart("jarFile");
           if (jarFilePart != null && jarFilePart.getSize() > 0) {
-            Path pluginsDir = Paths.get("/app/plugins");
             Files.createDirectories(pluginsDir);
 
             String fileName = registerRequest.getPluginId() + ".jar";
@@ -131,9 +116,9 @@ public class PluginController {
         registerRequest = gson.fromJson(request.body(), RegisterPluginRequest.class);
       }
 
-      if (registerRequest == null || registerRequest.getPluginId() == null ||
+      if (registerRequest == null || !isValidPluginId(registerRequest.getPluginId()) ||
           registerRequest.getOriginalMainClass() == null) {
-        return error(response, 400, "Plugin ID and original main class are required");
+        return error(response, 400, "Valid plugin ID and original main class are required");
       }
 
       Plugin existingPlugin = database.findPluginById(registerRequest.getPluginId());
@@ -157,7 +142,7 @@ public class PluginController {
           .build();
 
       if (registerRequest.getEncryptionKey() != null && !registerRequest.getEncryptionKey().isEmpty()) {
-        plugin.setEncryptionKey(wrapEncryptionKey(registerRequest.getEncryptionKey()));
+        plugin.setEncryptionKey(keyEncryptionService.wrapKeyIfPresent(registerRequest.getEncryptionKey()));
       }
 
       database.savePlugin(plugin);
@@ -178,7 +163,6 @@ public class PluginController {
       responseData.put("jarUploaded", jarFilePath != null);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error registering plugin", e);
       return error(response, 500, "Internal server error: " + e.getMessage());
@@ -186,39 +170,24 @@ public class PluginController {
   }
 
   public String getPluginMetadata(Request request, Response response) {
-    response.type("application/json");
-
-
     try {
-      String requestBody = request.body();
-
-      MetadataRequest metadataRequest;
-
-      boolean e2eeEnabled = e2eeService != null && e2eeService.isReady();
-      if (e2eeEnabled) {
-        if (!isEncryptedPayload(requestBody)) {
-
-          return error(response, 415, "Encrypted payload required");
-
-        }
-
-        try {
-
-          String decryptedBody = e2eeService.decryptToString(requestBody);
-
-          metadataRequest = gson.fromJson(decryptedBody, MetadataRequest.class);
-
-        } catch (E2EEException e) {
-
-          log.warn("Failed to decrypt metadata request: {}", e.getMessage());
-
-          return error(response, 400, "Failed to decrypt request");
-
-        }
-      } else {
-        metadataRequest = gson.fromJson(requestBody, MetadataRequest.class);
+      if (!isE2EEReady()) {
+        return error(response, 503, "E2EE service not available");
       }
 
+      String requestBody = request.body();
+      if (!isEncryptedPayload(requestBody)) {
+        return error(response, 415, "Encrypted payload required");
+      }
+
+      DecryptedPayload payload;
+      try {
+        payload = e2eeService.decryptRequest(requestBody);
+      } catch (E2EEException e) {
+        log.warn("Failed to decrypt metadata request: {}", e.getMessage());
+        return error(response, 400, "Failed to decrypt request");
+      }
+      MetadataRequest metadataRequest = gson.fromJson(payload.getData(), MetadataRequest.class);
 
       if (metadataRequest == null || metadataRequest.getLicenseKey() == null) {
         return error(response, 400, "License key is required");
@@ -229,11 +198,18 @@ public class PluginController {
         return error(response, 401, "Session token is required");
       }
 
-      dev.neuralabs.auth.model.Session session = database.findSessionByToken(sessionToken);
-      if (session == null || !session.isActive()) {
+      Session session = database.findSessionByToken(sessionToken);
+      if (session == null || !session.isValid()) {
         logAuditEvent("METADATA_REQUEST_DENIED", metadataRequest.getLicenseKey(),
             request.ip(), false, "Invalid or expired session token");
         return error(response, 401, "Invalid or expired session");
+      }
+
+      if (session.getHardwareFingerprint() == null
+          || !session.getHardwareFingerprint().equals(metadataRequest.getHardwareFingerprint())) {
+        logAuditEvent("METADATA_REQUEST_DENIED", metadataRequest.getLicenseKey(),
+            request.ip(), false, "Session hardware fingerprint mismatch");
+        return error(response, 403, "Session/hardware mismatch");
       }
 
       if (!session.getLicenseKey().equals(metadataRequest.getLicenseKey())) {
@@ -292,24 +268,12 @@ public class PluginController {
       responseData.put("pluginVersion", plugin.getVersion());
       responseData.put("targetPackages", targetPackages);
 
-
-      if (isE2EEReady()) {
-        try {
-
-          return responseEncryption.encryptResponse(responseData, sessionToken);
-
-        } catch (E2EEEncryptionException e) {
-
-          log.error("Failed to encrypt metadata response", e);
-
-          return error(response, 500, "Failed to encrypt response");
-
-        }
-      } else {
-        return gson.toJson(responseData);
+      try {
+        return responseEncryption.encryptResponse(responseData, payload);
+      } catch (E2EEEncryptionException e) {
+        log.error("Failed to encrypt metadata response", e);
+        return error(response, 500, "Failed to encrypt response");
       }
-
-
     } catch (Exception e) {
       log.error("Error getting plugin metadata", e);
       return error(response, 500, "Internal server error");
@@ -317,8 +281,6 @@ public class PluginController {
   }
 
   public String listPlugins(Request request, Response response) {
-    response.type("application/json");
-
     try {
       List<Plugin> plugins = database.findAllPlugins();
 
@@ -343,7 +305,6 @@ public class PluginController {
       responseData.put("total", plugins.size());
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error listing plugins", e);
       return error(response, 500, "Internal server error");
@@ -351,13 +312,6 @@ public class PluginController {
   }
 
   public String updatePlugin(Request request, Response response) {
-    response.type("application/json");
-
-    // SECURITY: Require admin authentication for plugin updates
-    if (!authFilter.requireAdmin(request, response)) {
-      return response.body();
-    }
-
     try {
       String pluginId = request.params(":id");
       Plugin existingPlugin = database.findPluginById(pluginId);
@@ -371,13 +325,17 @@ public class PluginController {
       existingPlugin.setName(updateRequest.getName());
       existingPlugin.setVersion(updateRequest.getVersion());
       existingPlugin.setDescription(updateRequest.getDescription());
-      existingPlugin.setOriginalMainClass(updateRequest.getOriginalMainClass());
+      if (updateRequest.getOriginalMainClass() != null && !updateRequest.getOriginalMainClass().isBlank()) {
+        existingPlugin.setOriginalMainClass(updateRequest.getOriginalMainClass());
+      }
       String updatedEncryptionKey = updateRequest.getEncryptionKey();
-      existingPlugin.setEncryptionKey(updatedEncryptionKey != null && !updatedEncryptionKey.isEmpty()
-          ? wrapEncryptionKey(updatedEncryptionKey)
-          : null);
+      if (updatedEncryptionKey != null && !updatedEncryptionKey.isEmpty()) {
+        existingPlugin.setEncryptionKey(keyEncryptionService.wrapKey(updatedEncryptionKey));
+      }
       existingPlugin.setOwnerId(updateRequest.getOwnerId());
-      existingPlugin.setJarHash(updateRequest.getJarHash());
+      if (updateRequest.getJarHash() != null && !updateRequest.getJarHash().isBlank()) {
+        existingPlugin.setJarHash(updateRequest.getJarHash());
+      }
       existingPlugin.setUpdatedAt(Date.from(Instant.now()));
 
       database.savePlugin(existingPlugin);
@@ -391,7 +349,6 @@ public class PluginController {
       responseData.put("message", "Plugin updated successfully");
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error updating plugin", e);
       return error(response, 500, "Internal server error");
@@ -399,13 +356,6 @@ public class PluginController {
   }
 
   public String deletePlugin(Request request, Response response) {
-    response.type("application/json");
-
-    // SECURITY: Require admin authentication for plugin deletion
-    if (!authFilter.requireAdmin(request, response)) {
-      return response.body();
-    }
-
     try {
       String pluginId = request.params(":id");
       Plugin plugin = database.findPluginById(pluginId);
@@ -420,7 +370,6 @@ public class PluginController {
           "Plugin deleted: " + pluginId);
 
       return gson.toJson(Map.of("success", true, "message", "Plugin deleted successfully"));
-
     } catch (Exception e) {
       log.error("Error deleting plugin", e);
       return error(response, 500, "Internal server error");
@@ -428,8 +377,6 @@ public class PluginController {
   }
 
   public String getPlugin(Request request, Response response) {
-    response.type("application/json");
-
     try {
       String pluginId = request.params(":id");
       Plugin plugin = database.findPluginById(pluginId);
@@ -453,7 +400,6 @@ public class PluginController {
       responseData.put("plugin", sanitized);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error getting plugin", e);
       return error(response, 500, "Internal server error");
@@ -462,10 +408,9 @@ public class PluginController {
 
   public String downloadProtectedPlugin(Request request, Response response) {
     try {
-      JWTUtil.JWTClaims claims = validateRequest(request);
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       if (claims == null) {
         response.status(401);
-        response.type("application/json");
         return gson.toJson(Map.of("success", false, "error", "Unauthorized access"));
       }
 
@@ -474,7 +419,6 @@ public class PluginController {
       Plugin plugin = database.findPluginById(pluginId);
       if (plugin == null || !plugin.isActive()) {
         response.status(404);
-        response.type("application/json");
         return gson.toJson(Map.of("success", false, "error", "Plugin not found or inactive"));
       }
 
@@ -493,7 +437,6 @@ public class PluginController {
 
       if (userLicense == null) {
         response.status(403);
-        response.type("application/json");
         return gson.toJson(Map.of("success", false, "error", "You do not have a valid license for this plugin"));
       }
 
@@ -513,7 +456,6 @@ public class PluginController {
       logAuditEvent("PLUGIN_DOWNLOAD_REQUEST", userLicense.getLicenseKey(), request.ip(), true,
           "Plugin download requested: " + pluginId + " by user: " + claims.getUserId());
 
-      response.type("application/json");
       Map<String, Object> responseData = new HashMap<>();
       responseData.put("success", true);
       responseData.put("pluginId", pluginId);
@@ -523,20 +465,16 @@ public class PluginController {
       responseData.put("encrypted", userLicense.getEncryptionKey() != null);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error downloading plugin", e);
       response.status(500);
-      response.type("application/json");
       return gson.toJson(Map.of("success", false, "error", "Internal server error"));
     }
   }
 
   public String getAvailablePlugins(Request request, Response response) {
-    response.type("application/json");
-
     try {
-      JWTUtil.JWTClaims claims = validateRequest(request);
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       if (claims == null) {
         return error(response, 401, "Unauthorized access");
       }
@@ -602,15 +540,11 @@ public class PluginController {
           pluginInfo.put("encrypted", userLicenseForPlugin.getEncryptionKey() != null);
         }
 
-
         if (claims.isAdmin()) {
-
           pluginInfo.put("originalMainClass", plugin.getOriginalMainClass());
 
           pluginInfo.put("jarHash", plugin.getJarHash());
-
         }
-
 
         availablePlugins.add(pluginInfo);
       }
@@ -626,7 +560,6 @@ public class PluginController {
       responseData.put("userRole", claims.getRole());
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error fetching available plugins", e);
       return error(response, 500, "Internal server error");
@@ -634,10 +567,8 @@ public class PluginController {
   }
 
   public String encryptPluginRealTime(Request request, Response response) {
-    response.type("application/json");
-
     try {
-      JWTUtil.JWTClaims claims = validateRequest(request);
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       if (claims == null) {
         return error(response, 401, "Unauthorized access");
       }
@@ -673,8 +604,6 @@ public class PluginController {
 
       String sessionId = UUID.randomUUID().toString();
 
-
-
       userLicense.setTargetPackages(targetPackages);
       userLicense.setUpdatedAt(Date.from(Instant.now()));
 
@@ -702,7 +631,6 @@ public class PluginController {
           "Plugin configured for encryption. The key will be generated during the encryption process.");
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error in real-time encryption", e);
       return error(response, 500, "Internal server error");
@@ -710,15 +638,8 @@ public class PluginController {
   }
 
   public String startDockerEncryption(Request request, Response response) {
-    response.type("application/json");
-
-    // SECURITY: Require authentication for encryption operations
-    if (!authFilter.requireAuthenticated(request, response)) {
-      return response.body();
-    }
-
     try {
-      JWTUtil.JWTClaims claims = validateRequest(request);
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       if (claims == null) {
         return error(response, 401, "Unauthorized access");
       }
@@ -760,22 +681,18 @@ public class PluginController {
 
       String inputJarPath = "/app/plugins/" + pluginId + ".jar";
 
-      String perLicenseSalt = ensureLicenseSalt(userLicense);
-
       dockerService.encryptPlugin(
               pluginId,
               userLicense.getLicenseKey(),
               userLicense.getTargetPackages(),
               inputJarPath,
-              perLicenseSalt,
               logMessage -> webSocketHandler.sendLogToSession(sessionId, logMessage, "info"),
               (percent, progressMessage) -> webSocketHandler.sendProgressToSession(sessionId, percent))
           .thenAccept(result -> {
             if (result.isSuccess()) {
               try {
-
                 if (result.getEncryptionKey() != null) {
-                  String wrappedKey = wrapEncryptionKey(result.getEncryptionKey());
+                  String wrappedKey = keyEncryptionService.wrapKeyIfPresent(result.getEncryptionKey());
                   userLicense.setEncryptionKey(wrappedKey);
                   log.info("Stored wrapped encryption key for license {}", maskLicenseKey(userLicense.getLicenseKey()));
                 }
@@ -840,7 +757,6 @@ public class PluginController {
           });
 
       return gson.toJson(Map.of("success", true, "message", "Encryption started", "sessionId", sessionId));
-
     } catch (Exception e) {
       log.error("Error starting Docker encryption", e);
       return error(response, 500, "Internal server error");
@@ -852,23 +768,23 @@ public class PluginController {
       String pluginId = request.params(":pluginId");
       String licenseKey = request.params(":licenseKey");
 
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       License license = database.findLicenseByKey(licenseKey);
-      if (license == null || !license.canBeUsed() || !pluginId.equals(license.getPluginId())) {
+      if (license == null || !license.canBeUsed() || !pluginId.equals(license.getPluginId())
+          || claims == null
+          || (!claims.isAdmin() && !claims.getEmail().equalsIgnoreCase(license.getCustomerEmail()))) {
         response.status(403);
-        response.type("application/json");
         return gson.toJson(Map.of("success", false, "error", "Invalid license for this plugin"));
       }
 
       Plugin plugin = database.findPluginById(pluginId);
       if (plugin == null || !plugin.isActive()) {
         response.status(404);
-        response.type("application/json");
         return gson.toJson(Map.of("success", false, "error", "Plugin not found or inactive"));
       }
 
       if (license.getEncryptionKey() == null || license.getTargetPackages() == null) {
         response.status(400);
-        response.type("application/json");
         return gson
             .toJson(Map.of("success", false, "error", "Plugin not encrypted yet. Please encrypt first."));
       }
@@ -877,6 +793,10 @@ public class PluginController {
           "Encrypted plugin downloaded: " + pluginId);
 
       String encryptedJarPath = findEncryptedJarFile(pluginId, licenseKey);
+      if (encryptedJarPath == null) {
+        response.status(404);
+        return gson.toJson(Map.of("success", false, "error", "Encrypted plugin not available"));
+      }
 
       response.type("application/java-archive");
       String pluginName = plugin.getName() != null ? plugin.getName() : pluginId;
@@ -895,22 +815,9 @@ public class PluginController {
       String fileName = String.format("%s-%s-encrypted-%s.jar", pluginName, version, encryptionId);
       response.header("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
 
-      if (encryptedJarPath != null) {
-        try {
-          Path jarFile = Paths.get(encryptedJarPath);
-          byte[] jarContent = Files.readAllBytes(jarFile);
-          response.header("Content-Length", String.valueOf(jarContent.length));
-          return jarContent;
-        } catch (Exception e) {
-          log.warn("Failed to read encrypted JAR file: " + encryptedJarPath, e);
-        }
-      }
-
-      log.info("Real encrypted JAR not found, returning dummy content for: " + pluginId);
-      byte[] dummyJarContent = createDummyJarContent(pluginId, licenseKey);
-      response.header("Content-Length", String.valueOf(dummyJarContent.length));
-      return dummyJarContent;
-
+      byte[] jarContent = Files.readAllBytes(Paths.get(encryptedJarPath));
+      response.header("Content-Length", String.valueOf(jarContent.length));
+      return jarContent;
     } catch (Exception e) {
       log.error("Error downloading encrypted plugin", e);
       response.status(500);
@@ -943,23 +850,6 @@ public class PluginController {
     return null;
   }
 
-  private byte[] createDummyJarContent(String pluginId, String licenseKey) {
-    String content = "PK\u0003\u0004\u0014\u0000\u0000\u0000\u0008\u0000ENCRYPTED_PLUGIN_" + pluginId + "_"
-        + licenseKey.substring(0, 8);
-    return content.getBytes();
-  }
-
-  private JWTUtil.JWTClaims validateRequest(Request request) {
-    String authHeader = request.headers("Authorization");
-
-    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      return null;
-    }
-
-    String token = authHeader.substring(7);
-    return JWTUtil.validateToken(token);
-  }
-
   private void logAuditEvent(String event, String licenseKey, String clientIp,
                              boolean success, String message) {
     try {
@@ -979,6 +869,8 @@ public class PluginController {
     }
   }
 
+  @Getter
+  @Setter
   public static class RegisterPluginRequest {
     private String pluginId;
     private String name;
@@ -989,180 +881,22 @@ public class PluginController {
     private String ownerId;
     private String jarHash;
     private List<String> targetPackages;
-
-    public String getPluginId() {
-      return pluginId;
-    }
-
-    public void setPluginId(String pluginId) {
-      this.pluginId = pluginId;
-    }
-
-    public String getName() {
-      return name;
-    }
-
-    public void setName(String name) {
-      this.name = name;
-    }
-
-    public String getVersion() {
-      return version;
-    }
-
-    public void setVersion(String version) {
-      this.version = version;
-    }
-
-    public String getDescription() {
-      return description;
-    }
-
-    public void setDescription(String description) {
-      this.description = description;
-    }
-
-    public String getOriginalMainClass() {
-      return originalMainClass;
-    }
-
-    public void setOriginalMainClass(String originalMainClass) {
-      this.originalMainClass = originalMainClass;
-    }
-
-    public String getEncryptionKey() {
-      return encryptionKey;
-    }
-
-    public void setEncryptionKey(String encryptionKey) {
-      this.encryptionKey = encryptionKey;
-    }
-
-    public String getOwnerId() {
-      return ownerId;
-    }
-
-    public void setOwnerId(String ownerId) {
-      this.ownerId = ownerId;
-    }
-
-    public String getJarHash() {
-      return jarHash;
-    }
-
-    public void setJarHash(String jarHash) {
-      this.jarHash = jarHash;
-    }
-
-    public List<String> getTargetPackages() {
-      return targetPackages;
-    }
-
-    public void setTargetPackages(List<String> targetPackages) {
-      this.targetPackages = targetPackages;
-    }
   }
 
+  @Getter
+  @Setter
   public static class MetadataRequest {
     private String licenseKey;
     private String hardwareFingerprint;
-    private String sessionToken; // SECURITY: Required for authentication
-
-    public String getLicenseKey() {
-      return licenseKey;
-    }
-
-    public void setLicenseKey(String licenseKey) {
-      this.licenseKey = licenseKey;
-    }
-
-    public String getHardwareFingerprint() {
-      return hardwareFingerprint;
-    }
-
-    public void setHardwareFingerprint(String hardwareFingerprint) {
-      this.hardwareFingerprint = hardwareFingerprint;
-    }
-
-    public String getSessionToken() {
-      return sessionToken;
-    }
-
-    public void setSessionToken(String sessionToken) {
-      this.sessionToken = sessionToken;
-    }
+    private String sessionToken;
   }
 
-  public static class DownloadRequest {
-    private String userId;
-    private String pluginVersion;
-    private Map<String, String> metadata;
-    private List<String> targetPackages;
-
-    public String getUserId() {
-      return userId;
-    }
-
-    public void setUserId(String userId) {
-      this.userId = userId;
-    }
-
-    public String getPluginVersion() {
-      return pluginVersion;
-    }
-
-    public void setPluginVersion(String pluginVersion) {
-      this.pluginVersion = pluginVersion;
-    }
-
-    public Map<String, String> getMetadata() {
-      return metadata;
-    }
-
-    public void setMetadata(Map<String, String> metadata) {
-      this.metadata = metadata;
-    }
-
-    public List<String> getTargetPackages() {
-      return targetPackages;
-    }
-
-    public void setTargetPackages(List<String> targetPackages) {
-      this.targetPackages = targetPackages;
-    }
-  }
-
-  // SECURITY: Mask license key for logging to prevent exposure
-  private String ensureLicenseSalt(License license) {
-    if (license.getPerLicenseSalt() != null && !license.getPerLicenseSalt().isEmpty()) {
-      return license.getPerLicenseSalt();
-    }
-    String newSalt = generatePerLicenseSalt();
-    license.setPerLicenseSalt(newSalt);
-    try {
-      license.setUpdatedAt(Date.from(Instant.now()));
-      database.saveLicense(license);
-    } catch (Exception e) {
-      log.warn("Failed to persist new per-license salt: {}", e.getMessage());
-    }
-    return newSalt;
-  }
-
-  private String generatePerLicenseSalt() {
-    byte[] salt = new byte[32];
-    new SecureRandom().nextBytes(salt);
-    return Base64.getEncoder().encodeToString(salt);
+  private static boolean isValidPluginId(String pluginId) {
+    return pluginId != null && pluginId.matches("[A-Za-z0-9._-]{1,64}") && !pluginId.startsWith(".");
   }
 
   private boolean isE2EEReady() {
     return e2eeService != null && e2eeService.isReady() && responseEncryption != null;
-  }
-
-  private boolean isEncryptedPayload(String body) {
-    if (body == null || body.isEmpty()) {
-      return false;
-    }
-    return body.contains("\"ciphertext\"") && body.contains("\"timestamp\"");
   }
 
   private String unwrapEncryptionKey(String wrappedKey) {
@@ -1177,56 +911,7 @@ public class PluginController {
     }
   }
 
-  private String wrapEncryptionKey(String plaintextKey) {
-    if (plaintextKey == null || plaintextKey.isEmpty()) {
-      return null;
-    }
-    return keyEncryptionService.wrapKey(plaintextKey);
-  }
-
-  private String maskLicenseKey(String licenseKey) {
-    if (licenseKey == null || licenseKey.length() < 8) {
-      return "***";
-    }
-    return licenseKey.substring(0, 4) + "***" + licenseKey.substring(licenseKey.length() - 4);
-  }
-
-  public static class EncryptionRequest {
-    private List<String> targetPackages;
-    private String jarFilePath;
-    private Map<String, Object> options;
-
-    public List<String> getTargetPackages() {
-      return targetPackages;
-    }
-
-    public void setTargetPackages(List<String> targetPackages) {
-      this.targetPackages = targetPackages;
-    }
-
-    public String getJarFilePath() {
-      return jarFilePath;
-    }
-
-    public void setJarFilePath(String jarFilePath) {
-      this.jarFilePath = jarFilePath;
-    }
-
-    public Map<String, Object> getOptions() {
-      return options;
-    }
-
-    public void setOptions(Map<String, Object> options) {
-      this.options = options;
-    }
-  }
-
-  /**
-   * Get the Ed25519 public key for JAR signature verification
-   */
   public String getSignaturePublicKey(Request request, Response response) {
-    response.type("application/json");
-
     try {
       String publicKeyBase64Url = dockerService.getPublicKeyBase64Url();
 
@@ -1238,15 +923,9 @@ public class PluginController {
       responseData.put("usage", "JAR signature verification");
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error getting signature public key", e);
       return error(response, 500, "Internal server error");
     }
-  }
-
-  private String error(Response response, int status, String message) {
-    response.status(status);
-    return gson.toJson(Map.of("success", false, "error", message));
   }
 }

@@ -5,9 +5,7 @@ import {Button} from '@/components/ui/button.jsx'
 import {Progress} from '@/components/ui/progress.jsx'
 import {Alert, AlertDescription} from '@/components/ui/alert.jsx'
 import {Badge} from '@/components/ui/badge.jsx'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
-const WS_BASE_URL = 'ws://localhost:8082'
+import {API_BASE_URL, WS_BASE_URL} from '@/lib/config.js'
 
 export default function EncryptionModal({
                                             isOpen,
@@ -201,7 +199,6 @@ export default function EncryptionModal({
 
                     addLog('Docker encryption process started...', 'info')
                     setProgress(20)
-
                 } catch (err) {
                     addLog(`Error starting encryption: ${err.message}`, 'error')
                     setError(err.message)
@@ -209,7 +206,6 @@ export default function EncryptionModal({
                     setIsProcessing(false)
                 }
             }, 1000)
-
         } catch (err) {
             addLog(`Error: ${err.message}`, 'error')
             setError(err.message)
@@ -218,11 +214,32 @@ export default function EncryptionModal({
         }
     }
 
-    const downloadPlugin = () => {
-        if (encryptionData && encryptionData.downloadUrl) {
-            addLog('Initiating plugin download...', 'info')
-            const backendUrl = `${API_BASE_URL}/plugins/${plugin.pluginId}/download/${encryptionData.licenseKey}`
-            window.open(backendUrl, '_blank')
+    const downloadPlugin = async () => {
+        if (!encryptionData || !encryptionData.downloadUrl) {
+            return
+        }
+        addLog('Initiating plugin download...', 'info')
+        try {
+            const response = await fetch(`${API_BASE_URL}/plugins/${plugin.pluginId}/download/${encryptionData.licenseKey}`, {
+                headers: {
+                    'Authorization': `Bearer ${userToken}`
+                }
+            })
+            if (!response.ok) {
+                throw new Error(`Download failed (HTTP ${response.status})`)
+            }
+            const disposition = response.headers.get('Content-Disposition') || ''
+            const match = disposition.match(/filename="([^"]+)"/)
+            const url = URL.createObjectURL(await response.blob())
+            const link = document.createElement('a')
+            link.href = url
+            link.download = match ? match[1] : `${plugin.pluginId}-encrypted.jar`
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+            URL.revokeObjectURL(url)
+        } catch (err) {
+            addLog(err.message, 'error')
         }
     }
 

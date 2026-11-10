@@ -11,6 +11,7 @@ import dev.neuralabs.auth.config.DatabaseConfig;
 import dev.neuralabs.auth.model.*;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
+import org.bson.UuidRepresentation;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.codecs.pojo.PojoCodecProvider;
 import org.bson.types.ObjectId;
@@ -19,13 +20,13 @@ import org.mongojack.JacksonMongoCollection;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 import static com.mongodb.client.model.Filters.*;
 import static org.bson.codecs.configuration.CodecRegistries.*;
 
 @Slf4j
 public class MongoConnection implements DatabaseInterface {
-
   private MongoClient mongoClient;
   private MongoDatabase database;
   private JacksonMongoCollection<License> licensesCollection;
@@ -88,19 +89,19 @@ public class MongoConnection implements DatabaseInterface {
           .withCodecRegistry(pojoCodecRegistry);
 
       licensesCollection = JacksonMongoCollection.builder()
-          .build(database, "licenses", License.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "licenses", License.class, UuidRepresentation.STANDARD);
       pluginsCollection = JacksonMongoCollection.builder()
-          .build(database, "plugins", Plugin.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "plugins", Plugin.class, UuidRepresentation.STANDARD);
       activationsCollection = JacksonMongoCollection.builder()
-          .build(database, "activations", Activation.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "activations", Activation.class, UuidRepresentation.STANDARD);
       sessionsCollection = JacksonMongoCollection.builder()
-          .build(database, "sessions", Session.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "sessions", Session.class, UuidRepresentation.STANDARD);
       auditLogsCollection = JacksonMongoCollection.builder()
-          .build(database, "auditLogs", AuditLog.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "auditLogs", AuditLog.class, UuidRepresentation.STANDARD);
       usersCollection = JacksonMongoCollection.builder()
-          .build(database, "users", User.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "users", User.class, UuidRepresentation.STANDARD);
       userSessionsCollection = JacksonMongoCollection.builder()
-          .build(database, "userSessions", UserSession.class, org.bson.UuidRepresentation.STANDARD);
+          .build(database, "userSessions", UserSession.class, UuidRepresentation.STANDARD);
 
       createIndexes();
 
@@ -109,7 +110,6 @@ public class MongoConnection implements DatabaseInterface {
       createDefaultLicenses();
 
       log.info("MongoDB database initialized successfully");
-
     } catch (Exception e) {
       log.error("Failed to initialize MongoDB connection", e);
       throw new RuntimeException("Could not connect to MongoDB", e);
@@ -118,7 +118,6 @@ public class MongoConnection implements DatabaseInterface {
 
   private void createIndexes() {
     try {
-
       licensesCollection.createIndex(new Document("licenseKey", 1));
       pluginsCollection.createIndex(new Document("pluginId", 1));
       activationsCollection.createIndex(new Document("licenseKey", 1));
@@ -256,7 +255,7 @@ public class MongoConnection implements DatabaseInterface {
 
     if (existing != null) {
       activation.setId(existing.getId());
-      // preserve original activation timestamp if present
+
       activation.setActivatedAt(existing.getActivatedAt());
     } else {
       activation.setId(new ObjectId().toHexString());
@@ -343,7 +342,6 @@ public class MongoConnection implements DatabaseInterface {
   @Override
   public boolean isHealthy() {
     try {
-
       database.runCommand(new Document("ping", 1));
       return true;
     } catch (Exception e) {
@@ -369,12 +367,15 @@ public class MongoConnection implements DatabaseInterface {
 
   @Override
   public User findUserById(String userId) {
-    return usersCollection.find(eq("id", userId)).first();
+    if (userId == null || !ObjectId.isValid(userId)) {
+      return null;
+    }
+    return usersCollection.find(eq("_id", new ObjectId(userId))).first();
   }
 
   @Override
   public User findUserByEmail(String email) {
-    return usersCollection.find(regex("email", "^" + email + "$", "i")).first();
+    return usersCollection.find(regex("email", "^" + Pattern.quote(email) + "$", "i")).first();
   }
 
   @Override
@@ -399,7 +400,9 @@ public class MongoConnection implements DatabaseInterface {
 
   @Override
   public void deleteUser(String userId) {
-    usersCollection.deleteOne(eq("id", userId));
+    if (userId != null && ObjectId.isValid(userId)) {
+      usersCollection.deleteOne(eq("_id", new ObjectId(userId)));
+    }
 
     deleteUserSessionsByUserId(userId);
   }

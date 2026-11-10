@@ -18,7 +18,6 @@ import java.util.List;
 @Builder
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class Plugin {
-
   @Id
   @ObjectId
   @JsonProperty("_id")

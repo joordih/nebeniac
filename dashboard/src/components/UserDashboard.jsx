@@ -16,12 +16,6 @@ import PluginList from "./PluginList.jsx";
 import UserLicenseManager from "./UserLicenseManager.jsx";
 import { Button } from "@/components/ui/button.jsx";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card.jsx";
-import {
   Tabs,
   TabsContent,
   TabsList,
@@ -29,8 +23,8 @@ import {
 } from "@/components/ui/tabs.jsx";
 import { Alert, AlertDescription } from "@/components/ui/alert.jsx";
 import { ERR_SERVER_CONNECTION } from "@/lib/utils.js";
-
-const API_BASE_URL = "http://localhost:8080/api/v1";
+import { API_BASE_URL } from "@/lib/config.js";
+import StatCard from "./StatCard.jsx";
 
 export default function UserDashboard({ user }) {
   const { logout, getAuthHeaders, isAdmin } = useAuth();
@@ -116,25 +110,6 @@ export default function UserDashboard({ user }) {
       setLoading(false);
     }
   };
-
-  const StatCard = ({
-    title,
-    value,
-    description,
-    icon: Icon,
-    color = "blue",
-  }) => (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <Icon className={`h-4 w-4 text-${color}-600`} />
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </CardContent>
-    </Card>
-  );
 
   if (loading) {
     return (
@@ -246,7 +221,7 @@ export default function UserDashboard({ user }) {
           </TabsList>
 
           <TabsContent value="plugins" className="space-y-4">
-            <PluginList userId={user?.id} onStatsUpdate={loadUserStats} />
+            <PluginList />
           </TabsContent>
 
           <TabsContent value="licenses" className="space-y-4">

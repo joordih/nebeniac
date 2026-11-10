@@ -1,35 +1,28 @@
-# Node
 **/node_modules
 **/npm-debug.log
 **/yarn-error.log
 **/pnpm-debug.log
 
-# Build outputs
 **/dist
 **/build
 **/.vite
 **/.turbo
 
-# IDE
 **/.idea
 **/.vscode
 **/*.swp
 **/*.swo
 **/.DS_Store
 
-# Git
 **/.git
 **/.gitignore
 
-# Tests
 **/coverage
 **/.nyc_output
 
-# Environment
 **/.env
 **/.env.local
 **/.env.*.local
 
-# Logs
 **/logs
 **/*.log

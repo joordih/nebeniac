@@ -9,8 +9,6 @@ import {Alert, AlertDescription} from '@/components/ui/alert.jsx'
 import {useAuth} from '@/contexts/AuthContext.jsx'
 import {ERR_SERVER_CONNECTION} from '@/lib/utils.js'
 
-const API_BASE_URL = 'http://localhost:8080/api/v1'
-
 export default function LoginForm({onForgotPassword}) {
     const navigate = useNavigate()
     const {login} = useAuth()

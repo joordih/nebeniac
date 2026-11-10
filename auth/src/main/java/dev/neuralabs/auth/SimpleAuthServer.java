@@ -4,14 +4,15 @@ import static spark.Spark.*;
 
 import dev.neuralabs.auth.config.AuthConfig;
 import dev.neuralabs.auth.controller.*;
-import dev.neuralabs.auth.crypto.TinkE2EEManager;
+import dev.neuralabs.auth.crypto.E2EEDecryptionService;
+import dev.neuralabs.auth.crypto.E2EEResponseEncryption;
+import dev.neuralabs.auth.crypto.KeyEncryptionService;
 import dev.neuralabs.auth.database.DatabaseConnection;
-import java.io.File;
+import dev.neuralabs.auth.security.AuthorizationFilter;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 public class SimpleAuthServer {
-
     private static final String API_PREFIX = "/api/v1";
 
     public static void main(String[] args) {
@@ -40,18 +41,9 @@ public class SimpleAuthServer {
                 new Thread(SimpleAuthServer::shutdown)
             );
 
-            System.out.printf(
-                "Authentication Server iniciado correctamente en puerto %d%n",
-                port
-            );
             log.info(
                 "Authentication Server iniciado correctamente en puerto {}",
                 port
-            );
-            System.out.printf(
-                "API disponible en: http://localhost:%d%s%n",
-                port,
-                API_PREFIX
             );
             log.info(
                 "API disponible en: http://localhost:{}{}",
@@ -70,62 +62,7 @@ public class SimpleAuthServer {
 
         DatabaseConnection.getInstance().initialize();
 
-       
-        initializeE2EE();
-
         log.info("Componentes inicializados correctamente");
-    }
-
-    private static void initializeE2EE() {
-        try {
-            log.info("Initializing E2EE system...");
-
-           
-            File keysDir = new File("keys");
-            if (!keysDir.exists()) {
-                keysDir.mkdirs();
-                log.info("Keys directory created: keys/");
-            }
-
-           
-            File privateKeyFile = new File("keys/server_private_key.json");
-            File publicKeyFile = new File("keys/server_public_key.json");
-
-            if (privateKeyFile.exists() && publicKeyFile.exists()) {
-                log.info("E2EE keys found in: keys/");
-            } else {
-                log.info(
-                    "E2EE keys not found, generating new keys..."
-                );
-            }
-
-           
-            TinkE2EEManager e2eeManager = new TinkE2EEManager();
-
-            if (e2eeManager.isInitialized()) {
-                log.info("E2EE system initialized successfully");
-                log.info("  - Private key: keys/server_private_key.json");
-                log.info("  - Public key: keys/server_public_key.json");
-                log.info("");
-                log.info(
-                    "To use E2EE in clients, copy the public key:"
-                );
-                log.info(
-                    "   cp keys/server_public_key.json <client>/src/main/resources/"
-                );
-                log.info("");
-            } else {
-                log.warn("E2EE system initialized but not ready");
-            }
-        } catch (Exception e) {
-            log.error("Error initializing E2EE system: {}", e.getMessage());
-            log.warn(
-                "Server will continue without E2EE. Clients will use plaintext communication."
-            );
-            log.warn(
-                "To enable E2EE, fix the error and restart the server."
-            );
-        }
     }
 
     private static void configureServer(int port) {
@@ -148,6 +85,10 @@ public class SimpleAuthServer {
                 response.header(
                     "Access-Control-Allow-Headers",
                     config.getCorsAllowedHeaders()
+                );
+                response.header(
+                    "Access-Control-Expose-Headers",
+                    "Content-Disposition"
                 );
             }
 
@@ -188,10 +129,25 @@ public class SimpleAuthServer {
         log.info("Server configured on port {}", port);
     }
 
-    private static void setupRoutes() {
+    private static void setupRoutes() throws Exception {
+        KeyEncryptionService keyEncryptionService = new KeyEncryptionService();
+        E2EEDecryptionService e2eeService = new E2EEDecryptionService();
+        E2EEResponseEncryption responseEncryption = new E2EEResponseEncryption();
+        if (!e2eeService.isReady()) {
+            throw new IllegalStateException("E2EE keys could not be initialized");
+        }
+        log.info("E2EE ready; public key at {}", e2eeService.getPublicKeyFilePath());
+
+        AuthorizationFilter authorizationFilter = new AuthorizationFilter(
+            API_PREFIX,
+            DatabaseConnection.getInstance().getDatabase()
+        );
+        before(API_PREFIX + "/*", authorizationFilter::filter);
+
         SimpleLicenseController licenseController =
-            new SimpleLicenseController();
-        PluginController pluginController = new PluginController();
+            new SimpleLicenseController(e2eeService, responseEncryption);
+        PluginController pluginController =
+            new PluginController(keyEncryptionService, e2eeService, responseEncryption);
         AuthController authController = new AuthController();
         UserController userController = new UserController();
         SetupController setupController = new SetupController();
@@ -210,7 +166,6 @@ public class SimpleAuthServer {
             post("/licenses/generate", licenseController::generateNewLicense);
             get("/licenses/user/:userId", licenseController::getUserLicenses);
 
-           
             get("/e2ee/public-key", licenseController::getPublicKey);
             get("/e2ee/stats", licenseController::getE2EEStats);
 
@@ -278,7 +233,6 @@ public class SimpleAuthServer {
         });
 
         get("/health", (request, response) -> {
-            response.type("application/json");
             DatabaseConnection dbConnection = DatabaseConnection.getInstance();
             boolean healthy = dbConnection.isHealthy();
             String dbType = dbConnection.getDatabaseType();

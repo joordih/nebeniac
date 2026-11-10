@@ -1,199 +1,115 @@
 package dev.neuralabs.auth.security;
 
+import static spark.Spark.halt;
+
 import com.google.gson.Gson;
+import dev.neuralabs.auth.database.DatabaseInterface;
+import dev.neuralabs.auth.model.User;
 import dev.neuralabs.auth.util.JWTUtil;
+import dev.neuralabs.auth.util.JWTUtil.JWTClaims;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import spark.Request;
 import spark.Response;
 
-import java.util.Map;
-
-/**
- * Authorization filter for protecting admin endpoints.
- * SECURITY: Ensures only authenticated admin users can access sensitive operations.
- * 
- * Features:
- * - JWT token validation
- * - Role-based access control (RBAC)
- * - Automatic 401/403 responses for unauthorized access
- */
 @Slf4j
 public class AuthorizationFilter {
+  private static final String CLAIMS_ATTRIBUTE = "authClaims";
 
-    private final Gson gson = new Gson();
+  private static final Set<String> PUBLIC_ROUTES = Set.of(
+      "POST /verify",
+      "POST /heartbeat",
+      "POST /plugins/metadata",
+      "GET /e2ee/public-key",
+      "GET /plugins/signature/public-key",
+      "POST /auth/login",
+      "POST /auth/complete-registration",
+      "POST /auth/request-password-reset",
+      "POST /auth/reset-password",
+      "GET /setup/status",
+      "POST /setup/admin",
+      "POST /setup/admin/default");
 
-    /**
-     * Validates JWT token and checks for admin role.
-     * 
-     * @param request The HTTP request
-     * @param response The HTTP response
-     * @return true if authorized, false otherwise
-     */
-    public boolean requireAdmin(Request request, Response response) {
-        return requireRole(request, response, "admin");
+  private static final List<Pattern> ADMIN_ROUTES = List.of(
+      Pattern.compile("[A-Z]+ /licenses(/(?!user/).*)?"),
+      Pattern.compile("[A-Z]+ /license/.*"),
+      Pattern.compile("GET /statistics"),
+      Pattern.compile("GET /e2ee/stats"),
+      Pattern.compile("(GET|POST) /plugins"),
+      Pattern.compile("(PUT|DELETE) /plugins/[^/]+"),
+      Pattern.compile("[A-Z]+ /email/.*"));
+
+  private final String apiPrefix;
+  private final DatabaseInterface database;
+  private final Gson gson = new Gson();
+
+  public AuthorizationFilter(String apiPrefix, DatabaseInterface database) {
+    this.apiPrefix = apiPrefix;
+    this.database = database;
+  }
+
+  public void filter(Request request, Response response) {
+    if ("OPTIONS".equals(request.requestMethod())) {
+      return;
     }
 
-    /**
-     * Validates JWT token and checks for specific role.
-     * 
-     * @param request The HTTP request
-     * @param response The HTTP response
-     * @param requiredRole The role required to access the endpoint
-     * @return true if authorized, false otherwise
-     */
-    public boolean requireRole(Request request, Response response, String requiredRole) {
-        try {
-            // Extract JWT from Authorization header
-            String authHeader = request.headers("Authorization");
-            
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                log.warn("Missing or invalid Authorization header from IP: {}", request.ip());
-                response.status(401);
-                response.type("application/json");
-                response.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "Authentication required",
-                    "code", "MISSING_TOKEN"
-                )));
-                return false;
-            }
-
-            String token = authHeader.substring(7); // Remove "Bearer " prefix
-
-            // Validate JWT token
-            JWTUtil.JWTClaims claims = JWTUtil.validateToken(token);
-            if (claims == null) {
-                log.warn("Invalid JWT token from IP: {}", request.ip());
-                response.status(401);
-                response.type("application/json");
-                response.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "Invalid or expired token",
-                    "code", "INVALID_TOKEN"
-                )));
-                return false;
-            }
-
-            // Extract user ID and role from token
-            String userId = claims.getUserId();
-            String role = claims.getRole();
-
-            if (userId == null || role == null) {
-                log.warn("Token missing user ID or role from IP: {}", request.ip());
-                response.status(401);
-                response.type("application/json");
-                response.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "Invalid token claims",
-                    "code", "INVALID_CLAIMS"
-                )));
-                return false;
-            }
-
-            // Check if user has required role
-            if (!role.equalsIgnoreCase(requiredRole)) {
-                log.warn("User {} with role {} attempted to access {} endpoint from IP: {}", 
-                    userId, role, requiredRole, request.ip());
-                response.status(403);
-                response.type("application/json");
-                response.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "Insufficient permissions",
-                    "code", "FORBIDDEN",
-                    "requiredRole", requiredRole
-                )));
-                return false;
-            }
-
-            // Store user info in request attributes for use in controller
-            request.attribute("userId", userId);
-            request.attribute("userRole", role);
-
-            log.debug("User {} authorized for {} endpoint", userId, requiredRole);
-            return true;
-
-        } catch (Exception e) {
-            log.error("Error during authorization check", e);
-            response.status(500);
-            response.type("application/json");
-            response.body(gson.toJson(Map.of(
-                "success", false,
-                "error", "Authorization check failed",
-                "code", "INTERNAL_ERROR"
-            )));
-            return false;
-        }
+    String route = request.requestMethod() + " " + stripPrefix(request.pathInfo());
+    if (PUBLIC_ROUTES.contains(route)) {
+      return;
     }
 
-    /**
-     * Validates JWT token without role check (authenticated user only).
-     */
-    public boolean requireAuthenticated(Request request, Response response) {
-        try {
-            String authHeader = request.headers("Authorization");
-            
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                response.status(401);
-                response.type("application/json");
-                response.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "Authentication required"
-                )));
-                return false;
-            }
-
-            String token = authHeader.substring(7);
-
-            JWTUtil.JWTClaims claims = JWTUtil.validateToken(token);
-            if (claims == null) {
-                response.status(401);
-                response.type("application/json");
-                response.body(gson.toJson(Map.of(
-                    "success", false,
-                    "error", "Invalid or expired token"
-                )));
-                return false;
-            }
-
-            String userId = claims.getUserId();
-            String role = claims.getRole();
-
-            request.attribute("userId", userId);
-            request.attribute("userRole", role);
-
-            return true;
-
-        } catch (Exception e) {
-            log.error("Error during authentication check", e);
-            response.status(500);
-            response.type("application/json");
-            response.body(gson.toJson(Map.of(
-                "success", false,
-                "error", "Authentication check failed"
-            )));
-            return false;
-        }
+    JWTClaims claims = authenticate(request);
+    if (claims == null) {
+      log.warn("Rejected unauthenticated request {} from {}", route, request.ip());
+      halt(401, gson.toJson(Map.of("success", false, "error", "Authentication required")));
     }
 
-    /**
-     * Helper method to get authenticated user ID from request.
-     */
-    public static String getAuthenticatedUserId(Request request) {
-        return request.attribute("userId");
+    if (ADMIN_ROUTES.stream().anyMatch(p -> p.matcher(route).matches()) && !claims.isAdmin()) {
+      log.warn("User {} denied admin route {} from {}", claims.getUserId(), route, request.ip());
+      halt(403, gson.toJson(Map.of("success", false, "error", "Insufficient permissions")));
     }
 
-    /**
-     * Helper method to get authenticated user role from request.
-     */
-    public static String getAuthenticatedUserRole(Request request) {
-        return request.attribute("userRole");
+    request.attribute(CLAIMS_ATTRIBUTE, claims);
+  }
+
+  public static JWTClaims claims(Request request) {
+    return request.attribute(CLAIMS_ATTRIBUTE);
+  }
+
+  private JWTClaims authenticate(Request request) {
+    String authHeader = request.headers("Authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      return null;
     }
 
-    /**
-     * Checks if the authenticated user is an admin.
-     */
-    public static boolean isAdmin(Request request) {
-        String role = request.attribute("userRole");
-        return role != null && role.equalsIgnoreCase("admin");
+    JWTClaims claims = JWTUtil.validateToken(authHeader.substring(7));
+    if (claims == null) {
+      return null;
     }
+
+    User user = database.findUserById(claims.getUserId());
+    if (user == null || !user.canLogin()) {
+      return null;
+    }
+
+    return JWTClaims.builder()
+        .userId(user.getId())
+        .email(user.getEmail())
+        .role(user.getRole())
+        .issuedAt(claims.getIssuedAt())
+        .expiresAt(claims.getExpiresAt())
+        .build();
+  }
+
+  private String stripPrefix(String path) {
+    String collapsed = path.replaceAll("/+", "/").toLowerCase(Locale.ROOT);
+    String normalized = collapsed.length() > 1 && collapsed.endsWith("/")
+        ? collapsed.substring(0, collapsed.length() - 1)
+        : collapsed;
+    return normalized.startsWith(apiPrefix) ? normalized.substring(apiPrefix.length()) : normalized;
+  }
 }

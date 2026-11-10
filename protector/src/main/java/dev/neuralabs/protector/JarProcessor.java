@@ -34,21 +34,12 @@ public class JarProcessor {
     this.targetPackages = List.of("net.kerfu.alcachofa");
   }
 
-  public JarProcessor(Path inputJarPath, String licenseKey, String pluginId, List<String> targetPackages,
-                     String perLicenseSaltBase64, byte[] serverPepper) {
+  public JarProcessor(Path inputJarPath, List<String> targetPackages) throws NoSuchAlgorithmException {
     this.inputJarPath = inputJarPath;
     this.targetPackages = targetPackages != null && !targetPackages.isEmpty()
         ? targetPackages
         : List.of("net.kerfu.alcachofa");
-    this.encryptionUtil = new EncryptionUtil(licenseKey, pluginId, perLicenseSaltBase64, serverPepper);
-  }
-
-  public JarProcessor(Path inputJarPath, String licenseKey, String pluginId) {
-    this(inputJarPath, licenseKey, pluginId, null, null, null);
-  }
-
-  public JarProcessor(Path inputJarPath, String licenseKey, String pluginId, List<String> targetPackages) {
-    this(inputJarPath, licenseKey, pluginId, targetPackages, null, null);
+    this.encryptionUtil = new EncryptionUtil();
   }
 
   public void loadAndAnalyzeAndEncryptJar() throws Exception {
@@ -59,9 +50,7 @@ public class JarProcessor {
           if (!entry.isDirectory()) {
             byte[] data = readEntry(jarFile, entry);
             if (entry.getName().endsWith(".class")) {
-
               if (isClassInTargetPackage(entry.getName())) {
-
                 logger.info("Encrypting target-package class: {}", entry.getName());
                 EncryptedData encrypted = encryptionUtil.encryptClass(data);
                 encryptedClassEntries.put(entry.getName(), encrypted);

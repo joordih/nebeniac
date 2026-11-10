@@ -1,16 +1,17 @@
 package dev.neuralabs.auth.config;
 
+import dev.neuralabs.auth.security.SecretStore;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
+import java.util.Set;
 
 @Data
 @Slf4j
 public class AuthConfig {
-
   public enum EmailProvider {
     GMAIL_API, SMTP
   }
@@ -18,6 +19,10 @@ public class AuthConfig {
   public enum DatabaseType {
     LOCAL, MONGODB
   }
+
+  private static final int MIN_JWT_SECRET_LENGTH = 32;
+  private static final Set<String> KNOWN_INSECURE_JWT_SECRETS =
+      Set.of("your-super-secret-jwt-key-change-this-in-production");
 
   private static AuthConfig instance;
 
@@ -30,7 +35,7 @@ public class AuthConfig {
   private int serverPort = 8080;
   private String baseUrl = "http://localhost:3000";
 
-  private String jwtSecret = "your-super-secret-jwt-key-change-this-in-production";
+  private String jwtSecret;
   private int jwtExpirationHours = 24;
   private String jwtIssuer = "nebeniac-auth";
 
@@ -153,14 +158,9 @@ public class AuthConfig {
   }
 
   private void loadJwtConfig(Properties props) {
-    this.jwtSecret = getProperty(props, "jwt.secret", "JWT_SECRET",
-        "your-super-secret-jwt-key-change-this-in-production");
+    this.jwtSecret = resolveJwtSecret(props);
     this.jwtExpirationHours = getIntProperty(props, "jwt.expiration.hours", "JWT_EXPIRATION_HOURS", 24);
     this.jwtIssuer = getProperty(props, "jwt.issuer", "JWT_ISSUER", "nebeniac-auth");
-
-    if ("your-super-secret-jwt-key-change-this-in-production".equals(this.jwtSecret)) {
-      log.warn("Using default JWT secret! Please change jwt.secret in config.properties for production use");
-    }
   }
 
   private void loadSessionConfig(Properties props) {
@@ -274,18 +274,28 @@ public class AuthConfig {
       }
     }
 
-    if (jwtSecret.length() < 32) {
-      log.warn("JWT secret is too short. Consider using a longer secret for better security.");
+  }
+
+  private String resolveJwtSecret(Properties props) {
+    String configured = getProperty(props, "jwt.secret", "JWT_SECRET", "");
+    String secret = configured.isEmpty()
+        ? SecretStore.loadOrCreate("JWT_SECRET", "jwt_secret", 48)
+        : configured;
+    if (KNOWN_INSECURE_JWT_SECRETS.contains(secret) || secret.length() < MIN_JWT_SECRET_LENGTH) {
+      throw new IllegalStateException(
+          "JWT secret is insecure: it must be at least " + MIN_JWT_SECRET_LENGTH
+              + " characters and not a published default");
     }
+    return secret;
   }
 
   private String getProperty(Properties props, String propKey, String envKey, String defaultValue) {
-    String value = props.getProperty(propKey);
+    String value = System.getenv(envKey);
     if (value != null && !value.trim().isEmpty()) {
       return value.trim();
     }
 
-    value = System.getenv(envKey);
+    value = props.getProperty(propKey);
     if (value != null && !value.trim().isEmpty()) {
       return value.trim();
     }

@@ -16,7 +16,6 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 public final class JarSignatureVerifier {
-
   private static final String SIGNATURE_ALGORITHM = "Ed25519";
 
   private JarSignatureVerifier() {
@@ -27,12 +26,12 @@ public final class JarSignatureVerifier {
     if (logger != null) {
       logger.info("Starting JAR signature verification for: " + jarFile.getName());
     }
-    
+
     byte[] jarHash = calculateJarHash(jarFile);
-    
+
     if (logger != null) {
       logger.fine("JAR hash calculated (SHA-256 length): " + jarHash.length + " bytes");
-      // Log first 16 bytes of hash in hex for debugging
+
       StringBuilder hashPreview = new StringBuilder();
       for (int i = 0; i < Math.min(16, jarHash.length); i++) {
         hashPreview.append(String.format("%02x", jarHash[i]));
@@ -40,12 +39,10 @@ public final class JarSignatureVerifier {
       logger.fine("JAR hash preview (first 16 bytes): " + hashPreview.toString() + "...");
     }
 
-    // Ensure BouncyCastle is registered
     if (Security.getProvider("BC") == null) {
       Security.addProvider(new BouncyCastleProvider());
     }
 
-    // Intentar primero con Ed25519, luego con EdDSA
     Signature signature;
     try {
       signature = Signature.getInstance(SIGNATURE_ALGORITHM, "BC");
@@ -53,22 +50,21 @@ public final class JarSignatureVerifier {
         logger.fine("Using Ed25519 signature algorithm");
       }
     } catch (NoSuchAlgorithmException e) {
-      // Fallback a EdDSA
       signature = Signature.getInstance("EdDSA", "BC");
       if (logger != null) {
         logger.info("Using EdDSA instead of Ed25519 for signature verification");
       }
     }
-    
+
     signature.initVerify(publicKey);
     signature.update(jarHash);
 
     byte[] signatureBytes = decodeBase64Flexible(signatureBase64);
-    
+
     if (logger != null) {
       logger.fine("Signature bytes decoded (length): " + signatureBytes.length + " bytes");
     }
-    
+
     boolean valid = signature.verify(signatureBytes);
 
     if (!valid && logger != null) {
@@ -85,17 +81,14 @@ public final class JarSignatureVerifier {
   }
 
   private static byte[] decodeBase64Flexible(String base64String) {
-    // Try Base64URL first (with or without padding)
     try {
       return Base64.getUrlDecoder().decode(addBase64Padding(base64String));
     } catch (IllegalArgumentException e) {
-      // Fall back to standard Base64
       return Base64.getDecoder().decode(base64String);
     }
   }
 
   private static String addBase64Padding(String base64) {
-    // Add '=' padding if needed for Base64
     int mod = base64.length() % 4;
     if (mod == 0) {
       return base64;
@@ -121,8 +114,7 @@ public final class JarSignatureVerifier {
     String name = entry.getName();
     return name.endsWith(".encrypted") ||
         name.endsWith(".iv") ||
-        name.equals("plugin.yml") ||
-        name.equals("nebeniac-protection.properties");
+        name.equals("plugin.yml");
   }
 
   private static void updateDigest(JarFile jar, JarEntry entry, MessageDigest digest) {

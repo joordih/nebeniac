@@ -7,7 +7,6 @@ export default function ProtectedRoute({
   requirePermission = null,
 }) {
   const {
-    _user,
     loading,
     initialized,
     isAuthenticated,

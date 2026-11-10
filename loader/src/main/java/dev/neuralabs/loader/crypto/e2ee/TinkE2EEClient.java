@@ -7,10 +7,12 @@ import com.google.crypto.tink.hybrid.HybridConfig;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
@@ -18,130 +20,128 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class TinkE2EEClient {
+  private static final String PUBLIC_KEY_RESOURCE = "/server_public_key.json";
+  private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+  private static final int RESPONSE_KEY_BYTES = 32;
 
-    private static final String PUBLIC_KEY_RESOURCE = "/server_public_key.json";
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+  private final Logger logger;
+  private final Gson gson;
+  private KeysetHandle publicKeysetHandle;
+  private HybridEncrypt hybridEncrypt;
+  private boolean initialized = false;
 
-    private final Logger logger;
-    private final Gson gson;
-    private KeysetHandle publicKeysetHandle;
-    private HybridEncrypt hybridEncrypt;
-    private boolean initialized = false;
+  public TinkE2EEClient(Logger logger) {
+    this.logger = logger;
+    this.gson = new GsonBuilder().setPrettyPrinting().create();
 
-        public TinkE2EEClient(Logger logger) {
-        this.logger = logger;
-        this.gson = new GsonBuilder().setPrettyPrinting().create();
+    try {
+      HybridConfig.register();
+      logger.info("Google Tink HybridConfig registered successfully");
 
-        try {
-           
-            HybridConfig.register();
-            logger.info("Google Tink HybridConfig registered successfully");
+      loadPublicKey();
 
-           
-            loadPublicKey();
+      this.initialized = true;
+      logger.info("TinkE2EEClient initialized successfully");
+    } catch (Exception e) {
+      logger.log(Level.SEVERE, "Failed to initialize TinkE2EEClient", e);
+    }
+  }
 
-            this.initialized = true;
-            logger.info("TinkE2EEClient initialized successfully");
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to initialize TinkE2EEClient", e);
-        }
+  private void loadPublicKey() throws GeneralSecurityException, Exception {
+    try (InputStream is = getClass().getResourceAsStream(PUBLIC_KEY_RESOURCE)) {
+      if (is == null) {
+        throw new Exception("Public key resource not found: " + PUBLIC_KEY_RESOURCE);
+      }
+
+      byte[] keyBytes = readAllBytes(is);
+      String publicKeyJson = new String(keyBytes, StandardCharsets.UTF_8);
+
+      publicKeysetHandle = KeysetHandle.readNoSecret(
+          JsonKeysetReader.withString(publicKeyJson)
+      );
+
+      hybridEncrypt = publicKeysetHandle.getPrimitive(HybridEncrypt.class);
+
+      logger.info("Server public key loaded successfully");
+    }
+  }
+
+  public EncryptedRequest encryptPayload(String plaintext) throws GeneralSecurityException {
+    if (!initialized) {
+      throw new IllegalStateException("TinkE2EEClient is not initialized");
     }
 
-        private void loadPublicKey() throws GeneralSecurityException, Exception {
-        try (InputStream is = getClass().getResourceAsStream(PUBLIC_KEY_RESOURCE)) {
-            if (is == null) {
-                throw new Exception("Public key resource not found: " + PUBLIC_KEY_RESOURCE);
-            }
+    String nonce = generateNonce();
+    long timestamp = System.currentTimeMillis();
+    byte[] responseKey = new byte[RESPONSE_KEY_BYTES];
+    SECURE_RANDOM.nextBytes(responseKey);
 
-           
-            byte[] keyBytes = readAllBytes(is);
-            String publicKeyJson = new String(keyBytes, StandardCharsets.UTF_8);
+    Map<String, Object> innerPayload = new HashMap<>();
+    innerPayload.put("data", plaintext);
+    innerPayload.put("nonce", nonce);
+    innerPayload.put("timestamp", timestamp);
+    innerPayload.put("responseKey", Base64.getEncoder().encodeToString(responseKey));
 
-           
-            publicKeysetHandle = KeysetHandle.readNoSecret(
-                JsonKeysetReader.withString(publicKeyJson)
-            );
+    byte[] ciphertext = hybridEncrypt.encrypt(
+        gson.toJson(innerPayload).getBytes(StandardCharsets.UTF_8),
+        new byte[0]
+    );
 
-           
-            hybridEncrypt = publicKeysetHandle.getPrimitive(HybridEncrypt.class);
+    Map<String, Object> envelope = new HashMap<>();
+    envelope.put("ciphertext", Base64.getEncoder().encodeToString(ciphertext));
+    envelope.put("timestamp", timestamp);
+    envelope.put("version", "2.0");
 
-            logger.info("Server public key loaded successfully");
-        }
+    return new EncryptedRequest(gson.toJson(envelope), responseKey, nonce);
+  }
+
+  public static final class EncryptedRequest {
+    private final String body;
+    private final byte[] responseKey;
+    private final String nonce;
+
+    EncryptedRequest(String body, byte[] responseKey, String nonce) {
+      this.body = body;
+      this.responseKey = responseKey;
+      this.nonce = nonce;
     }
 
-        public String encryptPayload(String plaintext) throws GeneralSecurityException {
-        if (!initialized) {
-            throw new IllegalStateException("TinkE2EEClient is not initialized");
-        }
-
-       
-        String nonce = generateNonce();
-        long timestamp = System.currentTimeMillis();
-
-       
-        Map<String, Object> innerPayload = new HashMap<>();
-        innerPayload.put("data", plaintext);
-        innerPayload.put("nonce", nonce);
-        innerPayload.put("timestamp", timestamp);
-
-        String innerJson = gson.toJson(innerPayload);
-
-       
-        byte[] ciphertext = hybridEncrypt.encrypt(
-            innerJson.getBytes(StandardCharsets.UTF_8),
-            new byte[0]
-        );
-
-       
-        Map<String, Object> envelope = new HashMap<>();
-        envelope.put("ciphertext", Base64.getEncoder().encodeToString(ciphertext));
-        envelope.put("timestamp", timestamp);
-        envelope.put("version", "1.0");
-
-        return gson.toJson(envelope);
+    public String getBody() {
+      return body;
     }
 
-        public String encryptPayload(Map<String, Object> dataMap) throws GeneralSecurityException {
-        String plaintext = gson.toJson(dataMap);
-        return encryptPayload(plaintext);
+    public byte[] getResponseKey() {
+      return responseKey;
     }
 
-        public String encryptBytes(byte[] plaintext, byte[] contextInfo) throws GeneralSecurityException {
-        if (!initialized) {
-            throw new IllegalStateException("TinkE2EEClient is not initialized");
-        }
-
-        byte[] ciphertext = hybridEncrypt.encrypt(plaintext, contextInfo);
-        return Base64.getEncoder().encodeToString(ciphertext);
+    public String getNonce() {
+      return nonce;
     }
 
-        public String encryptBytes(byte[] plaintext) throws GeneralSecurityException {
-        return encryptBytes(plaintext, new byte[0]);
+    public void destroy() {
+      Arrays.fill(responseKey, (byte) 0);
+    }
+  }
+
+  private String generateNonce() {
+    byte[] nonceBytes = new byte[16];
+    SECURE_RANDOM.nextBytes(nonceBytes);
+    return Base64.getEncoder().encodeToString(nonceBytes);
+  }
+
+  public boolean isInitialized() {
+    return initialized && hybridEncrypt != null;
+  }
+
+  private byte[] readAllBytes(InputStream is) throws Exception {
+    byte[] buffer = new byte[8192];
+    int bytesRead;
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+    while ((bytesRead = is.read(buffer)) != -1) {
+      output.write(buffer, 0, bytesRead);
     }
 
-        private String generateNonce() {
-        byte[] nonceBytes = new byte[16];
-        SECURE_RANDOM.nextBytes(nonceBytes);
-        return Base64.getEncoder().encodeToString(nonceBytes);
-    }
-
-        public boolean isInitialized() {
-        return initialized && hybridEncrypt != null;
-    }
-
-        private byte[] readAllBytes(InputStream is) throws Exception {
-        byte[] buffer = new byte[8192];
-        int bytesRead;
-        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
-
-        while ((bytesRead = is.read(buffer)) != -1) {
-            output.write(buffer, 0, bytesRead);
-        }
-
-        return output.toByteArray();
-    }
-
-        public Gson getGson() {
-        return gson;
-    }
+    return output.toByteArray();
+  }
 }

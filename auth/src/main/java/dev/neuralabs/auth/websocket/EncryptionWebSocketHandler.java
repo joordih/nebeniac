@@ -2,6 +2,7 @@ package dev.neuralabs.auth.websocket;
 
 import com.google.common.collect.Maps;
 import com.google.gson.Gson;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
@@ -13,7 +14,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 public class EncryptionWebSocketHandler extends WebSocketServer {
-
   private final Map<String, WebSocket> sessions = new ConcurrentHashMap<>();
   private final Gson gson = new Gson();
 
@@ -139,6 +139,7 @@ public class EncryptionWebSocketHandler extends WebSocketServer {
     return null;
   }
 
+  @Getter
   public static class WebSocketMessage {
     private final String type;
     private final String message;
@@ -150,22 +151,6 @@ public class EncryptionWebSocketHandler extends WebSocketServer {
       this.message = message;
       this.level = level;
       this.timestamp = System.currentTimeMillis();
-    }
-
-    public String getType() {
-      return type;
-    }
-
-    public String getMessage() {
-      return message;
-    }
-
-    public String getLevel() {
-      return level;
-    }
-
-    public long getTimestamp() {
-      return timestamp;
     }
   }
 }

@@ -9,9 +9,9 @@ import {Badge} from '@/components/ui/badge.jsx'
 import {Alert, AlertDescription} from '@/components/ui/alert.jsx'
 import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '@/components/ui/dialog.jsx'
 import DownloadButton from './DownloadButton.jsx'
+import {API_BASE_URL} from '@/lib/config.js'
 
-const API_BASE_URL = 'http://localhost:8080/api/v1'
-export default function PluginList({userId, onStatsUpdate}) {
+export default function PluginList() {
     const {getAuthHeaders} = useAuth()
     const [plugins, setPlugins] = useState([])
     const [loading, setLoading] = useState(true)
@@ -59,12 +59,6 @@ export default function PluginList({userId, onStatsUpdate}) {
         plugin.description?.toLowerCase().includes(searchTerm.toLowerCase())
     )
 
-    const handleDownloadSuccess = () => {
-        if (onStatsUpdate) {
-            onStatsUpdate()
-        }
-    }
-
     const showPluginDetails = (plugin) => {
         setSelectedPlugin(plugin)
         setShowDetailsDialog(true)
@@ -91,7 +85,6 @@ export default function PluginList({userId, onStatsUpdate}) {
 
     return (
         <div className="space-y-4">
-            {}
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-2xl font-bold">Plugins Disponibles</h2>
@@ -110,7 +103,6 @@ export default function PluginList({userId, onStatsUpdate}) {
                 </Alert>
             )}
 
-            {}
             <div className="flex items-center space-x-2">
                 <Input
                     placeholder="Buscar plugins..."
@@ -120,7 +112,6 @@ export default function PluginList({userId, onStatsUpdate}) {
                 />
             </div>
 
-            {}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {filteredPlugins.map((plugin) => (
                     <Card key={plugin.pluginId} className="hover:shadow-lg transition-shadow">
@@ -138,7 +129,6 @@ export default function PluginList({userId, onStatsUpdate}) {
                         </CardHeader>
 
                         <CardContent className="space-y-4">
-                            {}
                             <div className="space-y-2 text-sm text-muted-foreground">
                                 <div className="flex items-center space-x-2">
                                     <User className="h-4 w-4"/>
@@ -172,13 +162,10 @@ export default function PluginList({userId, onStatsUpdate}) {
                                 )}
                             </div>
 
-                            {}
                             <div className="flex items-center space-x-2">
                                 <DownloadButton
                                     pluginId={plugin.pluginId}
                                     pluginName={plugin.name || plugin.pluginId}
-                                    userId={userId}
-                                    onSuccess={handleDownloadSuccess}
                                     className="flex-1"
                                 />
 
@@ -207,7 +194,6 @@ export default function PluginList({userId, onStatsUpdate}) {
                 </Card>
             )}
 
-            {}
             <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
                 <DialogContent className="max-w-2xl">
                     <DialogHeader>
@@ -265,8 +251,6 @@ export default function PluginList({userId, onStatsUpdate}) {
                                 <DownloadButton
                                     pluginId={selectedPlugin.pluginId}
                                     pluginName={selectedPlugin.name || selectedPlugin.pluginId}
-                                    userId={userId}
-                                    onSuccess={handleDownloadSuccess}
                                 />
                                 <Button variant="outline" onClick={() => setShowDetailsDialog(false)}>
                                     Cerrar

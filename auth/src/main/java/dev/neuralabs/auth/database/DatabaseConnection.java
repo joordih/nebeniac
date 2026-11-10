@@ -3,10 +3,8 @@ package dev.neuralabs.auth.database;
 import dev.neuralabs.auth.config.DatabaseConfig;
 import lombok.extern.slf4j.Slf4j;
 
-
 @Slf4j
 public class DatabaseConnection {
-
   private static DatabaseConnection instance;
   private DatabaseInterface database;
   private boolean initialized = false;
@@ -39,25 +37,8 @@ public class DatabaseConnection {
         database.initialize();
         initialized = true;
         log.info("Database connection initialized successfully");
-
       } catch (Exception e) {
-        log.error("Failed to initialize database", e);
-
-
-        if (config.isMongoEnabled()) {
-          log.warn("MongoDB initialization failed, falling back to local database");
-          try {
-            database = LocalDatabase.getInstance();
-            database.initialize();
-            initialized = true;
-            log.info("Fallback to local database successful");
-          } catch (Exception fallbackError) {
-            log.error("Fallback to local database also failed", fallbackError);
-            throw new RuntimeException("Could not initialize any database", fallbackError);
-          }
-        } else {
-          throw new RuntimeException("Could not initialize local database", e);
-        }
+        throw new IllegalStateException("Could not initialize " + config.getDatabaseType() + " database", e);
       }
     }
   }

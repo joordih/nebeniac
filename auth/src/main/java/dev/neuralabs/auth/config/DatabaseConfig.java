@@ -3,11 +3,9 @@ package dev.neuralabs.auth.config;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
-
 @Data
 @Slf4j
 public class DatabaseConfig {
-
   public enum DatabaseType {
     LOCAL, MONGODB
   }
@@ -17,7 +15,6 @@ public class DatabaseConfig {
 
   private DatabaseConfig() {
     this.authConfig = AuthConfig.getInstance();
-    System.out.printf("[DATABASE] DatabaseConfig initialized with type: %s%n", getDatabaseType());
     log.info("DatabaseConfig initialized with type: {}", getDatabaseType());
   }
 
@@ -55,9 +52,5 @@ public class DatabaseConfig {
 
   public boolean isMongoEnabled() {
     return getDatabaseType() == DatabaseType.MONGODB;
-  }
-
-  public boolean isLocalEnabled() {
-    return getDatabaseType() == DatabaseType.LOCAL;
   }
 }

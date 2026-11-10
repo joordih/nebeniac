@@ -20,3 +20,4 @@ dist/
 *.class
 auth/keys/
 deploy/docker/.env
+deploy/docker/docker-compose.override.yml

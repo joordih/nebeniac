@@ -16,7 +16,6 @@
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
 
-        <!-- Versiones de dependencias -->
         <junit.version>5.10.0</junit.version>
         <asm.version>9.6</asm.version>
         <commons-io.version>2.15.0</commons-io.version>
@@ -42,7 +41,7 @@
     </repositories>
 
     <dependencies>
-        <!-- Dependencias para manipulación de bytecode -->
+
         <dependency>
             <groupId>org.ow2.asm</groupId>
             <artifactId>asm</artifactId>
@@ -59,14 +58,12 @@
             <version>${asm.version}</version>
         </dependency>
 
-        <!-- Utilidades de archivos -->
         <dependency>
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>
             <version>${commons-io.version}</version>
         </dependency>
 
-        <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -74,7 +71,6 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Logging -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -86,28 +82,24 @@
             <version>${logback.version}</version>
         </dependency>
 
-        <!-- Commons Codec para Hex -->
         <dependency>
             <groupId>commons-codec</groupId>
             <artifactId>commons-codec</artifactId>
             <version>${commons-codec.version}</version>
         </dependency>
 
-        <!-- SnakeYAML para parsing de YAML -->
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
             <version>${snakeyaml.version}</version>
         </dependency>
 
-        <!-- RabbitMQ Client para mensajería -->
         <dependency>
             <groupId>com.rabbitmq</groupId>
             <artifactId>amqp-client</artifactId>
             <version>${rabbitmq.version}</version>
         </dependency>
 
-        <!-- Bukkit API para SecureBootstrap -->
         <dependency>
             <groupId>org.spigotmc</groupId>
             <artifactId>spigot-api</artifactId>
@@ -122,10 +114,6 @@
             <scope>provided</scope>
         </dependency>
 
-
-        <!-- Dependencia del secure-plugin removida - ahora usa AESUtil independiente -->
-
-        <!-- Tests -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
@@ -142,7 +130,7 @@
 
     <build>
         <plugins>
-            <!-- Plugin de compilación -->
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -160,7 +148,6 @@
                 </configuration>
             </plugin>
 
-            <!-- Plugin para crear un JAR ejecutable con todas las dependencias -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -195,4 +182,3 @@
         </plugins>
     </build>
 </project>
-

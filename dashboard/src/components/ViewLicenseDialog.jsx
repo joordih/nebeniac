@@ -63,7 +63,6 @@ export default function ViewLicenseDialog({
                 </DialogHeader>
 
                 <div className="space-y-6">
-                    {}
                     <Card>
                         <CardHeader>
                             <CardTitle className="text-lg flex items-center">
@@ -77,7 +76,6 @@ export default function ViewLicenseDialog({
                     </Card>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-lg flex items-center">
@@ -97,7 +95,6 @@ export default function ViewLicenseDialog({
                             </CardContent>
                         </Card>
 
-                        {}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-lg flex items-center">
@@ -117,7 +114,6 @@ export default function ViewLicenseDialog({
                             </CardContent>
                         </Card>
 
-                        {}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-lg flex items-center">
@@ -149,7 +145,6 @@ export default function ViewLicenseDialog({
                             </CardContent>
                         </Card>
 
-                        {}
                         <Card>
                             <CardHeader>
                                 <CardTitle className="text-lg flex items-center">
@@ -176,7 +171,6 @@ export default function ViewLicenseDialog({
                         </Card>
                     </div>
 
-                    {}
                     {license.features && license.features.length > 0 && (
                         <Card>
                             <CardHeader>
@@ -194,7 +188,6 @@ export default function ViewLicenseDialog({
                         </Card>
                     )}
 
-                    {}
                     {license.notes && (
                         <Card>
                             <CardHeader>

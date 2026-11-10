@@ -1,7 +1,6 @@
 import {createContext, useContext, useEffect, useState} from 'react'
 import {ERR_SERVER_CONNECTION} from '@/lib/utils.js'
-
-const API_BASE_URL = 'http://localhost:8080/api/v1'
+import {API_BASE_URL} from '@/lib/config.js'
 
 const AuthContext = createContext({})
 
@@ -19,7 +18,6 @@ export const AuthProvider = ({children}) => {
     const [loading, setLoading] = useState(true)
     const [initialized, setInitialized] = useState(false)
 
-
     useEffect(() => {
         const initializeAuth = async () => {
             try {
@@ -27,13 +25,11 @@ export const AuthProvider = ({children}) => {
                 const storedUser = localStorage.getItem('user')
 
                 if (storedToken && storedUser) {
-
                     const isValid = await verifyToken(storedToken)
                     if (isValid) {
                         setToken(storedToken)
                         setUser(JSON.parse(storedUser))
                     } else {
-
                         localStorage.removeItem('authToken')
                         localStorage.removeItem('user')
                     }
@@ -62,7 +58,6 @@ export const AuthProvider = ({children}) => {
             if (response.ok) {
                 const data = await response.json()
                 if (data.success && data.user) {
-
                     setUser(data.user)
                     localStorage.setItem('user', JSON.stringify(data.user))
                     return true
@@ -105,7 +100,6 @@ export const AuthProvider = ({children}) => {
     const logout = async () => {
         try {
             if (token) {
-
                 await fetch(`${API_BASE_URL}/auth/logout`, {
                     method: 'POST',
                     headers: {
@@ -116,7 +110,6 @@ export const AuthProvider = ({children}) => {
         } catch (error) {
             console.error('Logout error:', error)
         } finally {
-
             setToken(null)
             setUser(null)
             localStorage.removeItem('authToken')

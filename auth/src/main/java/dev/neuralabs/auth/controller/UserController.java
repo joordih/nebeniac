@@ -1,15 +1,20 @@
 package dev.neuralabs.auth.controller;
 
+import static dev.neuralabs.auth.controller.ControllerSupport.bearerClaims;
+import static dev.neuralabs.auth.controller.ControllerSupport.error;
+
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import dev.neuralabs.auth.config.AuthConfig;
 import dev.neuralabs.auth.database.DatabaseConnection;
 import dev.neuralabs.auth.database.DatabaseInterface;
 import dev.neuralabs.auth.model.AuditLog;
 import dev.neuralabs.auth.model.User;
 import dev.neuralabs.auth.service.EmailService;
+import dev.neuralabs.auth.util.GsonUtil;
 import dev.neuralabs.auth.util.JWTUtil;
 import dev.neuralabs.auth.util.PasswordUtil;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import spark.Request;
 import spark.Response;
@@ -19,26 +24,19 @@ import java.util.*;
 
 @Slf4j
 public class UserController {
-
   private final DatabaseInterface database;
   private final Gson gson;
   private final EmailService emailService;
 
   public UserController() {
     this.database = DatabaseConnection.getInstance().getDatabase();
-    this.gson = new GsonBuilder()
-        .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-        .create();
+    this.gson = GsonUtil.build();
 
     this.emailService = new EmailService(AuthConfig.getInstance());
   }
 
-
   public String createUser(Request request, Response response) {
-    response.type("application/json");
-
     try {
-
       JWTUtil.JWTClaims claims = validateAdminRequest(request);
       if (claims == null) {
         return error(response, 401, "Unauthorized access");
@@ -50,14 +48,11 @@ public class UserController {
         return error(response, 400, "Email is required");
       }
 
-
       if (database.findUserByEmail(createRequest.getEmail()) != null) {
         return error(response, 409, "Email is already in use");
       }
 
-
       String verificationToken = PasswordUtil.generateToken();
-
 
       User user = User.builder()
           .email(createRequest.getEmail())
@@ -73,7 +68,6 @@ public class UserController {
 
       database.saveUser(user);
       log.info("User saved to database: {}", user.getEmail());
-
 
       String userName = createRequest.getEmail().split("@")[0];
       log.info("Sending invitation email to: {} with token: {}", user.getEmail(), verificationToken);
@@ -92,17 +86,13 @@ public class UserController {
           "User created, but invitation email could not be sent");
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error creating user", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String getAllUsers(Request request, Response response) {
-    response.type("application/json");
-
     try {
       JWTUtil.JWTClaims claims = validateAdminRequest(request);
       if (claims == null) {
@@ -120,25 +110,20 @@ public class UserController {
       responseData.put("total", users.size());
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error fetching users", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String getUser(Request request, Response response) {
-    response.type("application/json");
-
     try {
-      JWTUtil.JWTClaims claims = validateRequest(request);
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       if (claims == null) {
         return error(response, 401, "Unauthorized access");
       }
 
       String userId = request.params(":id");
-
 
       if (!claims.isAdmin() && !claims.getUserId().equals(userId)) {
         return error(response, 403, "Not authorized to view this user");
@@ -154,25 +139,20 @@ public class UserController {
       responseData.put("user", sanitizeUser(user));
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error fetching user", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String updateUser(Request request, Response response) {
-    response.type("application/json");
-
     try {
-      JWTUtil.JWTClaims claims = validateRequest(request);
+      JWTUtil.JWTClaims claims = bearerClaims(request);
       if (claims == null) {
         return error(response, 401, "Unauthorized access");
       }
 
       String userId = request.params(":id");
-
 
       if (!claims.isAdmin() && !claims.getUserId().equals(userId)) {
         return error(response, 403, "Not authorized to update this user");
@@ -185,7 +165,6 @@ public class UserController {
 
       UpdateUserRequest updateRequest = gson.fromJson(request.body(), UpdateUserRequest.class);
 
-
       if (updateRequest.getFirstName() != null) {
         existingUser.setFirstName(updateRequest.getFirstName());
       }
@@ -195,7 +174,6 @@ public class UserController {
       if (updateRequest.getUsername() != null) {
         existingUser.setUsername(updateRequest.getUsername());
       }
-
 
       if (claims.isAdmin()) {
         if (updateRequest.getRole() != null) {
@@ -221,17 +199,13 @@ public class UserController {
       responseData.put("message", "User updated successfully");
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error updating user", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String deleteUser(Request request, Response response) {
-    response.type("application/json");
-
     try {
       JWTUtil.JWTClaims claims = validateAdminRequest(request);
       if (claims == null) {
@@ -239,7 +213,6 @@ public class UserController {
       }
 
       String userId = request.params(":id");
-
 
       if (claims.getUserId().equals(userId)) {
         return error(response, 400, "Cannot delete your own account");
@@ -256,17 +229,13 @@ public class UserController {
           "User deleted by admin: " + claims.getUserId());
 
       return gson.toJson(Map.of("success", true, "message", "User deleted successfully"));
-
     } catch (Exception e) {
       log.error("Error deleting user", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String resendInvitation(Request request, Response response) {
-    response.type("application/json");
-
     try {
       JWTUtil.JWTClaims claims = validateAdminRequest(request);
       if (claims == null) {
@@ -284,12 +253,10 @@ public class UserController {
         return error(response, 400, "User has already completed registration");
       }
 
-
       if (user.getEmailVerificationToken() == null) {
         user.setEmailVerificationToken(PasswordUtil.generateToken());
         database.saveUser(user);
       }
-
 
       String userName = user.getFullName() != null ? user.getFullName() : user.getEmail().split("@")[0];
       boolean emailSent = emailService.sendInvitationEmail(user.getEmail(), userName, user.getEmailVerificationToken());
@@ -305,17 +272,13 @@ public class UserController {
           "Error sending invitation");
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error resending invitation", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String searchUsers(Request request, Response response) {
-    response.type("application/json");
-
     try {
       JWTUtil.JWTClaims claims = validateAdminRequest(request);
       if (claims == null) {
@@ -375,17 +338,13 @@ public class UserController {
       responseData.put("query", query);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error searching users", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
   public String sendTestInvitation(Request request, Response response) {
-    response.type("application/json");
-
     try {
       JWTUtil.JWTClaims claims = validateAdminRequest(request);
       if (claims == null) {
@@ -415,26 +374,14 @@ public class UserController {
       responseData.put("testToken", testToken);
 
       return gson.toJson(responseData);
-
     } catch (Exception e) {
       log.error("Error sending test email", e);
       return error(response, 500, "Internal server error");
     }
   }
 
-
-  private JWTUtil.JWTClaims validateRequest(Request request) {
-    String authHeader = request.headers("Authorization");
-    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      return null;
-    }
-
-    String token = authHeader.substring(7);
-    return JWTUtil.validateToken(token);
-  }
-
   private JWTUtil.JWTClaims validateAdminRequest(Request request) {
-    JWTUtil.JWTClaims claims = validateRequest(request);
+    JWTUtil.JWTClaims claims = bearerClaims(request);
     if (claims == null || !claims.isAdmin()) {
       return null;
     }
@@ -478,43 +425,16 @@ public class UserController {
     }
   }
 
-
-  private String error(Response response, int status, String message) {
-    response.status(status);
-    return gson.toJson(Map.of("success", false, "error", message));
-  }
-
-
+  @Getter
+  @Setter
   public static class CreateUserRequest {
     private String email;
     private String role;
     private List<String> permissions;
-
-    public String getEmail() {
-      return email;
-    }
-
-    public void setEmail(String email) {
-      this.email = email;
-    }
-
-    public String getRole() {
-      return role;
-    }
-
-    public void setRole(String role) {
-      this.role = role;
-    }
-
-    public List<String> getPermissions() {
-      return permissions;
-    }
-
-    public void setPermissions(List<String> permissions) {
-      this.permissions = permissions;
-    }
   }
 
+  @Getter
+  @Setter
   public static class UpdateUserRequest {
     private String firstName;
     private String lastName;
@@ -522,53 +442,5 @@ public class UserController {
     private String role;
     private Boolean active;
     private List<String> permissions;
-
-    public String getFirstName() {
-      return firstName;
-    }
-
-    public void setFirstName(String firstName) {
-      this.firstName = firstName;
-    }
-
-    public String getLastName() {
-      return lastName;
-    }
-
-    public void setLastName(String lastName) {
-      this.lastName = lastName;
-    }
-
-    public String getUsername() {
-      return username;
-    }
-
-    public void setUsername(String username) {
-      this.username = username;
-    }
-
-    public String getRole() {
-      return role;
-    }
-
-    public void setRole(String role) {
-      this.role = role;
-    }
-
-    public Boolean getActive() {
-      return active;
-    }
-
-    public void setActive(Boolean active) {
-      this.active = active;
-    }
-
-    public List<String> getPermissions() {
-      return permissions;
-    }
-
-    public void setPermissions(List<String> permissions) {
-      this.permissions = permissions;
-    }
   }
 }

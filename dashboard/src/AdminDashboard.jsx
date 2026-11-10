@@ -24,8 +24,8 @@ import {
   CardTitle,
 } from "@/components/ui/card.jsx";
 import { Badge } from "@/components/ui/badge.jsx";
-
-const API_BASE_URL = "http://localhost:8080/api/v1";
+import { API_BASE_URL } from "@/lib/config.js";
+import StatCard from "./components/StatCard.jsx";
 
 export default function AdminDashboard() {
   const { user, logout, getAuthHeaders } = useAuth();
@@ -95,28 +95,8 @@ export default function AdminDashboard() {
     navigate("/login");
   };
 
-  const StatCard = ({
-    title,
-    value,
-    description,
-    icon: Icon,
-    color = "blue",
-  }) => (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <Icon className={`h-4 w-4 text-${color}-600`} />
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </CardContent>
-    </Card>
-  );
-
   return (
     <div className="min-h-screen bg-background">
-      {}
       <header className="border-b bg-card">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -169,7 +149,6 @@ export default function AdminDashboard() {
       </header>
 
       <div className="container mx-auto px-6 py-8">
-        {}
         <div className="flex space-x-1 mb-8 bg-muted p-1 rounded-lg">
           <button
             onClick={() => setActiveTab("dashboard")}
@@ -217,7 +196,6 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        {}
         {activeTab === "dashboard" && (
           <div className="space-y-6">
             <div>
@@ -227,7 +205,6 @@ export default function AdminDashboard() {
               </p>
             </div>
 
-            {}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <StatCard
                 title="Total Users"
@@ -259,7 +236,6 @@ export default function AdminDashboard() {
               />
             </div>
 
-            {}
             <Card>
               <CardHeader>
                 <CardTitle>Quick Actions</CardTitle>

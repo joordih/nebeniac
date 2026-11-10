@@ -60,6 +60,19 @@ GOOGLE_OAUTH_REFRESH_TOKEN=
 EMAIL_FROM=
 ```
 
+Optional secrets (if unset, the auth server generates them once and stores them with owner-only
+permissions in `/app/data/secrets` on the `auth_data` volume; never commit or log them):
+
+```
+JWT_SECRET=            # at least 32 characters
+NEBENIAC_MASTER_KEK=   # Base64 of 32 random bytes, e.g. `openssl rand -base64 32`
+NEBENIAC_SETUP_TOKEN=  # one-time token required to create the first administrator
+```
+
+On first start with no users, the auth server requires a setup token to create the first administrator.
+Set `NEBENIAC_SETUP_TOKEN`, or read the generated one with
+`docker exec nebeniac-auth cat /app/data/secrets/setup_token`, and paste it into the setup page.
+
 ### 3. Start the stack
 
 ```bash
